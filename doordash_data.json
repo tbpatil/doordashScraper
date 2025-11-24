@@ -1,0 +1,12 @@
+{
+  "restaurant_info": {
+    "name": "McDonald's",
+    "url": "https://www.doordash.com/store/mcdonald's-davis-720446/1025484/?event_type=autocomplete&pickup=false",
+    "cuisine": null
+  },
+  "menu_items": [],
+  "reviews": {
+    "overall_rating": null,
+    "individual_reviews": []
+  }
+}
