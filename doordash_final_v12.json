@@ -1,0 +1,582 @@
+{
+  "restaurant_info": {
+    "name": "McDonald's"
+  },
+  "menu_categories": {
+    "Featured Items": [
+      {
+        "name": "2 Cheeseburger Meal",
+        "price": "$13.99",
+        "image": "https://img.cdn4dd.com/p/fit=cover,width=1200,height=1200,format=auto,quality=90/media/photosV2/f6a32d05-c463-496a-82fd-1b734bd9d069-retina-large.jpg "
+      },
+      {
+        "name": "Hot 'N Spicy McChicken®",
+        "price": "$5.19",
+        "image": "https://img.cdn4dd.com/p/fit=cover,width=1200,height=1200,format=auto,quality=90/media/photosV2/7872ab2c-d5f7-4c84-8f81-a235225f8337-retina-large.jpg "
+      },
+      {
+        "name": "Quarter Pounder® with Cheese Meal",
+        "price": "$13.49",
+        "image": "https://img.cdn4dd.com/p/fit=cover,width=1200,height=1200,format=auto,quality=90/media/photosV2/aa47c38b-e069-495d-94e4-d5eda29ceb95-retina-large.jpg "
+      },
+      {
+        "name": "Filet-O-Fish® Meal",
+        "price": "$12.69",
+        "image": "https://img.cdn4dd.com/p/fit=cover,width=1200,height=1200,format=auto,quality=90/media/photosV2/98bdea37-1110-4e6b-b3a4-1f7ba91dbc94-retina-large.jpg "
+      },
+      {
+        "name": "McChicken®",
+        "price": "$4.49",
+        "image": "https://img.cdn4dd.com/p/fit=cover,width=1200,height=1200,format=auto,quality=90/media/photosV2/95f7ed46-bd9f-4b57-af1c-bc6b83f5d8d3-retina-large.jpg "
+      },
+      {
+        "name": "French Fries",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "10 pc. Chicken McNuggets®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "10 pc. Chicken McNuggets® Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "20 pc. Chicken McNuggets®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Big Mac®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "OREO® McFlurry®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Double Quarter Pounder® with Cheese Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "The Grinch™ McShaker Fries",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "McRib®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "McRib® Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Deluxe Spicy McCrispy™ Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Deluxe McCrispy™ Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Bacon Quarter Pounder® with Cheese Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Double Filet-O-Fish® Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Quarter Pounder® with Cheese Deluxe Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Spicy McCrispy™ Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "6 pc. Chicken McNuggets® Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Double Bacon Quarter Pounder® with Cheese Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Double Quarter Pounder® with Cheese Deluxe Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "McCrispy™ Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "2 Ranch Snack Wrap® Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "2 Spicy Snack Wrap® Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "2 Mix & Match Snack Wrap® Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "4 Piece McCrispy™ Strips Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "3 Piece McCrispy™ Strips Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Big Mac® Meal",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Double Cheeseburger",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "McDouble®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Double Quarter Pounder® with Cheese",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Quarter Pounder® with Cheese",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Cheeseburger",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Bacon McDouble®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Triple Cheeseburger",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Hamburger",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Bacon Quarter Pounder® with Cheese",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Quarter Pounder® with Cheese Deluxe",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Double Quarter Pounder® with Cheese Deluxe",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Double Bacon Quarter Pounder® with Cheese",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Daily Double®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "McCrispy™",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "40 pc. Chicken McNuggets®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "6 pc. Chicken McNuggets®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "4 pc. Chicken McNuggets®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "3 Piece McCrispy™ Strips",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Spicy Snack Wrap®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Ranch Snack Wrap®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Deluxe McCrispy™",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Spicy McCrispy™",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Deluxe Spicy McCrispy™",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "4 Piece McCrispy™ Strips",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Double Filet-O-Fish®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Filet-O-Fish®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "6 pc. Chicken McNuggets® Happy Meal®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Hamburger Happy Meal®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "4 pc. Chicken McNugget® Happy Meal®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Coke®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Diet Coke®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Strawberry Banana Smoothie",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Dr Pepper®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Mango Pineapple Smoothie",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Sweet Iced Tea",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Honest Kids® Organic Apple Juice Drink",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Minute Maid® Orange Juice",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Frozen Coca-Cola®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Diet Dr Pepper®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Fanta® Orange",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "POWERADE®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Medium Frozen Sprite® Lymonade®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Frozen Fanta® Blue Raspberry",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Milk",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Unsweetened Iced Tea",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "DASANI® Bottled Water",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Chocolate Milk",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Hot Tea",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Lemonade",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Sprite®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Hi-C® Orange",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "13 Cookie Tote",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "3 Pack Of Cookies",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Apple Pie",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "2 Cookies",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Holiday Pie",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "M&M® McFlurry®",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Caramel Frappé",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Mocha Frappé",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Iced French Vanilla Coffee",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Iced Caramel Coffee",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Iced Caramel Latte",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Iced Mocha",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Iced Coffee",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Premium Hot Chocolate",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Iced Coffee Black",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Iced Latte",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Iced French Vanilla Latte",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Decaf Coffee",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "CHIPS AHOY!® Frappé",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Mocha",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Latte",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Caramel Latte",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "French Vanilla Latte",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Medium Cappuccino",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Medium Vanilla Cappuccino",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Premium Roast Coffee",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "20 pc. Chicken McNuggets® & 2 Medium Fries",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "2 Large Fries",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Combo Pack",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Classic Quarter Pounder® with Cheese Pack",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "Classic Big Mac® Pack",
+        "price": null,
+        "image": null
+      },
+      {
+        "name": "2 Medium French Fries",
+        "price": null,
+        "image": null
+      }
+    ]
+  },
+  "reviews": {
+    "overall_rating": "4.5"
+  }
+}

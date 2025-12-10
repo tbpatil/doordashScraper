@@ -1,0 +1,86 @@
+# ------------------------
+# Python
+# ------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+*.log
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+*/env/
+*/venv/
+conda-env/
+*.conda
+*.yaml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ------------------------
+# Selenium / ChromeDriver
+# ------------------------
+chromedriver
+chromedriver.exe
+chromedriver.log
+*.crdownload
+selenium_driver/
+driver/
+drivers/
+*.bin
+
+# Undetected Chromedriver cache
+~/.local/share/undetected_chromedriver/
+undetected_chromedriver/
+.uc_cache/
+.uc_driver/
+
+# ------------------------
+# Chrome User Data (your profile_path)
+# ------------------------
+ChromeProfile/
+chrome-profile/
+user-data/
+User Data/
+Default/
+*/User Data/
+*/ChromeProfile/
+
+# ------------------------
+# macOS
+# ------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Spotlight
+.Spotlight-V100
+.Trashes
+
+# ------------------------
+# Build / Outputs
+# ------------------------
+build/
+dist/
+*.spec
+
+# ------------------------
+# JSON except your final output file
+# ------------------------
+*.json
+!doordash_final_v12.json
+
+# ------------------------
+# Anything else you want ignored
+# ------------------------
+scratch/
+temp/
+tmp/
+cache/
