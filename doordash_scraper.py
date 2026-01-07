@@ -48,8 +48,7 @@ class DoorDashScraper:
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
-        options.add_argument('user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        
+        options.add_argument('user-agent = Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36')
         self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
         self.wait = WebDriverWait(self.driver, 20)
     
@@ -77,6 +76,10 @@ class DoorDashScraper:
         # Scroll gradually using smooth scrolling
         self.driver.execute_script(f"window.scrollBy(0, {pixels});")
         self._human_delay(0.5, 1.5)
+        
+    def get_shadow_root(self, element):
+        return self.driver.execute_script("return arguments[0].shadowRoot", element)
+
     
     def scrape_restaurant(self, url: str) -> Dict:
         """
@@ -237,76 +240,71 @@ class DoorDashScraper:
         return info
     
     def _extract_menu_items(self) -> List[Dict]:
-        """Extract menu items from all sections."""
+        """Extract menu items from DoorDash item cards."""
         menu_items = []
-        
+
         try:
-            # Find all menu sections
-            # DoorDash typically has sections like "Featured Items", "Popular Items", etc.
-            section_selectors = [
-                "[data-testid='menu-section']",
-                "[class*='MenuSection']",
-                "[class*='menu-section']",
-                "section[class*='Menu']"
-            ]
-            
-            sections = []
-            for selector in section_selectors:
-                sections = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                if sections:
-                    break
-            
-            # If no sections found, try to find items directly
-            if not sections:
-                # Try to find menu items directly
-                item_selectors = [
-                    "[data-testid='menu-item']",
-                    "[class*='MenuItem']",
-                    "[class*='menu-item']",
-                    "div[class*='MenuItemCard']"
-                ]
-                
-                for selector in item_selectors:
-                    items = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                    if items:
-                        for i, item in enumerate(items):
-                            item_data = self._extract_item_details(item)
-                            if item_data:
-                                menu_items.append(item_data)
-                            # Add small delay every few items to mimic human reading
-                            if i > 0 and i % 5 == 0:
-                                self._human_delay(0.3, 0.8)
-                        break
-            else:
-                # Extract items from each section
-                for section_idx, section in enumerate(sections):
-                    section_name = self._get_section_name(section)
-                    items = section.find_elements(By.CSS_SELECTOR, 
-                        "[data-testid='menu-item'], [class*='MenuItem'], [class*='menu-item']")
-                    
-                    # Scroll to section if needed (human-like behavior)
-                    if section_idx > 0:
-                        try:
-                            self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", section)
-                            self._human_delay(0.5, 1.0)
-                        except:
-                            pass
-                    
-                    for i, item in enumerate(items):
-                        item_data = self._extract_item_details(item)
-                        if item_data:
-                            item_data['section'] = section_name
-                            menu_items.append(item_data)
-                        # Add small delay every few items
-                        if i > 0 and i % 5 == 0:
-                            self._human_delay(0.2, 0.5)
-            
+            # DoorDash image-action card = full menu item
+            cards = self.driver.find_elements(
+                By.CSS_SELECTOR,
+                "[data-testid='image-action-card-container']"
+            )
+
+            for card in cards:
+                item_data = self._extract_item_details(card)
+                if item_data:
+                    menu_items.append(item_data)
+
         except Exception as e:
             print(f"Error extracting menu items: {e}")
-            import traceback
-            traceback.print_exc()
-        
+
         return menu_items
+
+    def _extract_item_details(self, card):
+        item = {}
+
+        # Name
+        try:
+            name = card.find_element(
+                By.CSS_SELECTOR,
+                "span.sc-62d4eb3a-21, span[class*='21']"
+            ).text.strip()
+            item["name"] = name
+        except:
+            item["name"] = None
+
+        # Price
+        try:
+            price = card.find_element(
+                By.CSS_SELECTOR,
+                "span.sc-62d4eb3a-10, span[class*='10']"
+            ).text.strip()
+            item["price"] = price
+        except:
+            item["price"] = None
+
+        # Image URL
+        try:
+            img_el = card.find_element(
+                By.CSS_SELECTOR,
+                "img.StyledImg-sc-mcg5q6-0, img"
+            )
+            item["image_url"] = img_el.get_attribute("src")
+        except:
+            item["image_url"] = None
+
+        # Promo tag (optional)
+        try:
+            tag = card.find_element(
+                By.CSS_SELECTOR,
+                "div[data-testid^='fios_offer'], div.TagWrapper-sc-nj0mkn-2"
+            ).text.strip()
+            item["tag"] = tag
+        except:
+            item["tag"] = None
+
+        return item
+
     
     def _get_section_name(self, section_element) -> Optional[str]:
         """Extract section name from section element."""
