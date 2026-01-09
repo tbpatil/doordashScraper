@@ -1,6 +1,75 @@
 """
 DoorDash Restaurant Page Scraper
 Scrapes restaurant information, menu items, and reviews from DoorDash restaurant pages.
+
+DYNAMIC WEBSITE CHALLENGES & SOLUTIONS:
+========================================
+
+DoorDash is a highly dynamic website that presents several challenges:
+
+1. **JavaScript-Rendered Content**: 
+   - Most menu items are loaded dynamically via JavaScript
+   - Content may not be immediately available when page loads
+   - SOLUTION: Uses Selenium with WebDriverWait and explicit waits
+   - Uses human-like scrolling to trigger lazy loading
+
+2. **Cloudflare Protection**:
+   - DoorDash uses Cloudflare to detect automated access
+   - May block headless browsers or automated tools
+   - SOLUTION: Uses real Chrome profile with user-agent spoofing
+   - Implements human-like delays and scrolling patterns
+
+3. **Dynamic CSS Classes**:
+   - DoorDash uses dynamically generated CSS class names (e.g., sc-62d4eb3a-21)
+   - These classes change frequently, breaking selectors
+   - SOLUTION: Uses multiple fallback selectors and aria-labels
+   - Searches for patterns (like price patterns) in text content
+
+4. **Lazy Loading**:
+   - Menu items load as user scrolls
+   - Horizontal carousels require scrolling to reveal items
+   - SOLUTION: Implements comprehensive scrolling (vertical and horizontal)
+   - Parses content at multiple scroll positions
+
+5. **Price Extraction Issues**:
+   - Prices may be in different locations (aria-label, spans, etc.)
+   - Some items may not display prices until clicked
+   - SOLUTION: Multiple extraction methods with fallbacks
+   - Searches entire element text for price patterns
+
+ALTERNATIVE SOLUTIONS IF ISSUES PERSIST:
+=========================================
+
+1. **API Approach** (if available):
+   - Check if DoorDash has a public API
+   - Use API endpoints instead of web scraping
+   - More reliable but may require authentication
+
+2. **Playwright with Stealth**:
+   - Use playwright-stealth plugin
+   - Better at bypassing bot detection
+   - More modern than Selenium
+
+3. **Proxy Rotation**:
+   - Rotate IP addresses to avoid rate limiting
+   - Use residential proxies for better success
+
+4. **Browser Automation with Real Browser**:
+   - Use undetected-chromedriver (already in SCRAPE.py)
+   - Better at mimicking real user behavior
+
+5. **Manual Inspection**:
+   - Inspect page source after full load
+   - Identify stable selectors (data-testid attributes preferred)
+   - Update selectors when DoorDash changes structure
+
+6. **Rate Limiting**:
+   - Add delays between requests
+   - Implement exponential backoff
+   - Respect robots.txt
+
+NOTE: This scraper may need selector updates if DoorDash changes their HTML structure.
+Always test with headless=False first to visually verify what's being scraped.
 """
 
 from selenium import webdriver
@@ -110,9 +179,9 @@ class DoorDashScraper:
         }
         self._human_delay(1, 2)
         
-        # Extract menu items
+        # Extract menu items organized by sections
         print("Extracting menu items...")
-        result['menu_items'] = self._extract_menu_items()
+        result['menu_categories'] = self._extract_menu_items()
         self._human_delay(1, 2)
         
         # Extract reviews
@@ -239,170 +308,216 @@ class DoorDashScraper:
         
         return info
     
-    def _extract_menu_items(self) -> List[Dict]:
-        """Extract menu items from DoorDash item cards."""
-        menu_items = []
-
+    def _extract_menu_items(self) -> Dict:
+        """Extract menu items organized by sections."""
+        menu_categories = {}
+        
         try:
-            # DoorDash image-action card = full menu item
-            cards = self.driver.find_elements(
+            # First, find all section headers (h2 elements that mark menu categories)
+            section_headers = self.driver.find_elements(
                 By.CSS_SELECTOR,
-                "[data-testid='image-action-card-container']"
+                "h2[role='heading'], h2.sc-fubCfw, h2[class*='heading'], h2[class*='Title']"
             )
-
-            for card in cards:
-                item_data = self._extract_item_details(card)
-                if item_data:
-                    menu_items.append(item_data)
-
+            
+            # Also try to find sections by data-testid or other attributes
+            alt_sections = self.driver.find_elements(
+                By.CSS_SELECTOR,
+                "[data-testid*='section'], [data-testid*='category'], [class*='MenuSection']"
+            )
+            
+            # Get all menu item cards - DoorDash uses image-action-card-container
+            all_cards = self.driver.find_elements(
+                By.CSS_SELECTOR,
+                "[data-testid='image-action-card-container'], [role='button'][aria-label*='$'], div[role='button']"
+            )
+            
+            print(f"Found {len(section_headers)} section headers and {len(all_cards)} item cards")
+            
+            # If we found section headers, organize items by section
+            if section_headers:
+                # Create a map of section positions
+                sections_map = []
+                for header in section_headers:
+                    try:
+                        section_name = header.text.strip()
+                        if section_name and len(section_name) > 1 and section_name.lower() != "menu":
+                            # Get position of this header
+                            location = header.location['y']
+                            sections_map.append({
+                                'name': section_name,
+                                'y_position': location,
+                                'element': header
+                            })
+                    except:
+                        continue
+                
+                # Sort sections by position
+                sections_map.sort(key=lambda x: x['y_position'])
+                
+                # Assign items to sections based on their position
+                for card in all_cards:
+                    try:
+                        item_data = self._extract_item_details(card)
+                        if item_data and item_data.get('name'):
+                            # Get card position
+                            card_location = card.location['y']
+                            
+                            # Find which section this item belongs to
+                            assigned_section = "Featured Items"  # Default
+                            for i, section in enumerate(sections_map):
+                                if card_location >= section['y_position']:
+                                    assigned_section = section['name']
+                                else:
+                                    break
+                            
+                            # Add to appropriate section
+                            if assigned_section not in menu_categories:
+                                menu_categories[assigned_section] = []
+                            
+                            menu_categories[assigned_section].append(item_data)
+                    except Exception as e:
+                        print(f"Error processing card: {e}")
+                        continue
+            else:
+                # Fallback: if no sections found, try to extract all items and put in "Featured Items"
+                print("No section headers found, using fallback method")
+                for card in all_cards:
+                    try:
+                        item_data = self._extract_item_details(card)
+                        if item_data and item_data.get('name'):
+                            if "Featured Items" not in menu_categories:
+                                menu_categories["Featured Items"] = []
+                            menu_categories["Featured Items"].append(item_data)
+                    except Exception as e:
+                        continue
+            
         except Exception as e:
             print(f"Error extracting menu items: {e}")
-
-        return menu_items
-
-    def _extract_item_details(self, card):
-        item = {}
-
-        # Name
-        try:
-            name = card.find_element(
-                By.CSS_SELECTOR,
-                "span.sc-62d4eb3a-21, span[class*='21']"
-            ).text.strip()
-            item["name"] = name
-        except:
-            item["name"] = None
-
-        # Price
-        try:
-            price = card.find_element(
-                By.CSS_SELECTOR,
-                "span.sc-62d4eb3a-10, span[class*='10']"
-            ).text.strip()
-            item["price"] = price
-        except:
-            item["price"] = None
-
-        # Image URL
-        try:
-            img_el = card.find_element(
-                By.CSS_SELECTOR,
-                "img.StyledImg-sc-mcg5q6-0, img"
-            )
-            item["image_url"] = img_el.get_attribute("src")
-        except:
-            item["image_url"] = None
-
-        # Promo tag (optional)
-        try:
-            tag = card.find_element(
-                By.CSS_SELECTOR,
-                "div[data-testid^='fios_offer'], div.TagWrapper-sc-nj0mkn-2"
-            ).text.strip()
-            item["tag"] = tag
-        except:
-            item["tag"] = None
-
-        return item
-
-    
-    def _get_section_name(self, section_element) -> Optional[str]:
-        """Extract section name from section element."""
-        try:
-            # Try to find section title
-            title_selectors = [
-                "h2", "h3", "[class*='title']", "[class*='Title']",
-                "[data-testid='section-title']"
-            ]
-            for selector in title_selectors:
-                title_elem = section_element.find_elements(By.CSS_SELECTOR, selector)
-                if title_elem:
-                    return title_elem[0].text.strip()
-        except:
-            pass
-        return None
+            import traceback
+            traceback.print_exc()
+        
+        return menu_categories
     
     def _extract_item_details(self, item_element) -> Optional[Dict]:
-        """Extract details from a single menu item."""
+        """Extract all details from a single menu item card."""
         try:
             item_data = {
                 'name': None,
+                'description': None,
                 'price': None,
-                'deals': None,
-                'ratings': None,
-                'tags': None
+                'rating': None,
+                'most_liked_tag': None,
+                'image': None
             }
             
-            # Item name
-            name_selectors = [
-                "[data-testid='menu-item-name']",
-                "h3", "h4",
-                "[class*='item-name']",
-                "[class*='ItemName']",
-                "span[class*='name']"
-            ]
+            # Method 1: Try aria-label (often contains name and price)
+            try:
+                aria_label = item_element.get_attribute('aria-label')
+                if aria_label:
+                    # Extract name (everything before $)
+                    if '$' in aria_label:
+                        item_data['name'] = aria_label.split('$')[0].strip()
+                        # Try to extract price from aria-label
+                        price_match = re.search(r'\$[\d.]+', aria_label)
+                        if price_match and not item_data['price']:
+                            item_data['price'] = price_match.group()
+                    else:
+                        item_data['name'] = aria_label.strip()
+            except:
+                pass
             
-            for selector in name_selectors:
-                try:
-                    name_elem = item_element.find_elements(By.CSS_SELECTOR, selector)
-                    if name_elem:
-                        item_data['name'] = name_elem[0].text.strip()
-                        break
-                except:
-                    continue
+            # Method 2: Extract name from various selectors
+            if not item_data['name']:
+                name_selectors = [
+                    "span.sc-62d4eb3a-21",
+                    "span[class*='sc-62d4eb3a-21']",
+                    "[data-testid='menu-item-name']",
+                    "h3", "h4",
+                    "span[class*='name']",
+                    "div[class*='ItemName']",
+                    "span[class*='ItemName']"
+                ]
+                
+                for selector in name_selectors:
+                    try:
+                        name_elem = item_element.find_elements(By.CSS_SELECTOR, selector)
+                        if name_elem:
+                            name_text = name_elem[0].text.strip()
+                            if name_text and len(name_text) > 0:
+                                item_data['name'] = name_text
+                                break
+                    except:
+                        continue
             
-            # Price
-            price_selectors = [
-                "[data-testid='menu-item-price']",
-                "[class*='price']",
-                "[class*='Price']",
-                "span[class*='price']"
-            ]
-            
-            for selector in price_selectors:
-                try:
-                    price_elems = item_element.find_elements(By.CSS_SELECTOR, selector)
-                    for price_elem in price_elems:
-                        price_text = price_elem.text.strip()
-                        # Look for price pattern ($X.XX)
-                        if re.search(r'\$[\d.]+', price_text):
-                            item_data['price'] = price_text
+            # Extract price - try multiple methods
+            if not item_data['price']:
+                # Method 1: Look for price in specific spans
+                price_selectors = [
+                    "span.sc-62d4eb3a-10",
+                    "span[class*='sc-62d4eb3a-10']",
+                    "[data-testid='menu-item-price']",
+                    "span[class*='price']",
+                    "div[class*='price']",
+                    "span[class*='Price']"
+                ]
+                
+                for selector in price_selectors:
+                    try:
+                        price_elems = item_element.find_elements(By.CSS_SELECTOR, selector)
+                        for price_elem in price_elems:
+                            price_text = price_elem.text.strip()
+                            # Look for price pattern ($X.XX or X.XX)
+                            price_match = re.search(r'\$?[\d.]+', price_text)
+                            if price_match:
+                                price_val = price_match.group()
+                                if not price_val.startswith('$'):
+                                    price_val = '$' + price_val
+                                item_data['price'] = price_val
+                                break
+                        if item_data['price']:
                             break
-                    if item_data['price']:
-                        break
-                except:
-                    continue
+                    except:
+                        continue
+                
+                # Method 2: Search all text in the element for price pattern
+                if not item_data['price']:
+                    try:
+                        all_text = item_element.text
+                        price_match = re.search(r'\$[\d.]+', all_text)
+                        if price_match:
+                            item_data['price'] = price_match.group()
+                    except:
+                        pass
             
-            # Deals (e.g., "Free on $15+")
-            deal_selectors = [
-                "[class*='deal']",
-                "[class*='Deal']",
-                "[class*='promo']",
-                "[class*='Promo']",
-                "span[class*='badge']"
+            # Extract description
+            description_selectors = [
+                "[data-testid='menu-item-description']",
+                "p[class*='description']",
+                "span[class*='description']",
+                "div[class*='description']",
+                "p[class*='Description']"
             ]
             
-            deals_text = []
-            for selector in deal_selectors:
+            for selector in description_selectors:
                 try:
-                    deal_elems = item_element.find_elements(By.CSS_SELECTOR, selector)
-                    for deal_elem in deal_elems:
-                        deal_text = deal_elem.text.strip()
-                        if deal_text and len(deal_text) < 50:
-                            deals_text.append(deal_text)
+                    desc_elems = item_element.find_elements(By.CSS_SELECTOR, selector)
+                    if desc_elems:
+                        desc_text = desc_elems[0].text.strip()
+                        if desc_text and len(desc_text) > 0:
+                            item_data['description'] = desc_text
+                            break
                 except:
                     continue
             
-            if deals_text:
-                item_data['deals'] = deals_text[0] if len(deals_text) == 1 else deals_text
-            
-            # Ratings (e.g., "84% liked by 175 people")
+            # Extract rating (e.g., "84% liked by 175 people" or "4.5 stars")
             rating_selectors = [
                 "[class*='rating']",
                 "[class*='Rating']",
                 "[class*='like']",
                 "[class*='Like']",
-                "span[class*='percentage']"
+                "span[class*='percentage']",
+                "[data-testid*='rating']",
+                "span[aria-label*='star']"
             ]
             
             for selector in rating_selectors:
@@ -410,37 +525,63 @@ class DoorDashScraper:
                     rating_elems = item_element.find_elements(By.CSS_SELECTOR, selector)
                     for rating_elem in rating_elems:
                         rating_text = rating_elem.text.strip()
-                        # Look for percentage pattern
-                        if '%' in rating_text or 'liked' in rating_text.lower():
-                            item_data['ratings'] = rating_text
+                        # Look for percentage pattern (84% liked) or star rating
+                        if '%' in rating_text or 'liked' in rating_text.lower() or 'star' in rating_text.lower():
+                            item_data['rating'] = rating_text
                             break
-                    if item_data['ratings']:
+                    if item_data['rating']:
                         break
                 except:
                     continue
             
-            # Tags (e.g., "#1 most liked")
+            # Extract "#1 most liked" tag or similar badges
             tag_selectors = [
-                "[class*='tag']",
-                "[class*='Tag']",
-                "[class*='badge']",
-                "[class*='Badge']",
-                "span[class*='label']"
+                "div[data-testid^='fios_offer']",
+                "div.TagWrapper-sc-nj0mkn-2",
+                "div[class*='Tag']",
+                "span[class*='tag']",
+                "div[class*='badge']",
+                "span[class*='badge']",
+                "div[class*='Badge']",
+                "[data-testid*='tag']",
+                "[data-testid*='badge']"
             ]
             
-            tags = []
             for selector in tag_selectors:
                 try:
                     tag_elems = item_element.find_elements(By.CSS_SELECTOR, selector)
                     for tag_elem in tag_elems:
                         tag_text = tag_elem.text.strip()
-                        if tag_text and ('#' in tag_text or 'most' in tag_text.lower()):
-                            tags.append(tag_text)
+                        if tag_text:
+                            # Check if it's a "#1 most liked" type tag
+                            if '#' in tag_text or 'most liked' in tag_text.lower() or 'most' in tag_text.lower():
+                                item_data['most_liked_tag'] = tag_text
+                                break
+                            # Also check for other promotional tags
+                            elif len(tag_text) < 50 and tag_text not in ['$', '']:
+                                # Might be a promo tag, but prioritize "#1 most liked"
+                                if not item_data['most_liked_tag']:
+                                    item_data['most_liked_tag'] = tag_text
+                    if item_data['most_liked_tag'] and 'most liked' in item_data['most_liked_tag'].lower():
+                        break
                 except:
                     continue
             
-            if tags:
-                item_data['tags'] = tags[0] if len(tags) == 1 else tags
+            # Extract image URL
+            try:
+                img_el = item_element.find_element(By.CSS_SELECTOR, "img")
+                img_src = img_el.get_attribute("src")
+                if img_src:
+                    item_data['image'] = img_src
+            except:
+                try:
+                    # Try other image selectors
+                    img_el = item_element.find_element(By.CSS_SELECTOR, "img.StyledImg-sc-mcg5q6-0")
+                    img_src = img_el.get_attribute("src")
+                    if img_src:
+                        item_data['image'] = img_src
+                except:
+                    pass
             
             # Only return if we got at least a name
             if item_data['name']:
@@ -448,6 +589,8 @@ class DoorDashScraper:
             
         except Exception as e:
             print(f"Error extracting item details: {e}")
+            import traceback
+            traceback.print_exc()
         
         return None
     
@@ -652,7 +795,7 @@ def main():
     
     try:
         data = scraper.scrape_restaurant(url)
-        scraper.save_to_json(data, 'doordash_data.json')
+        scraper.save_to_json(data, 'doordash_final_v12.json')
         
         # Print summary
         print("\n" + "="*50)
@@ -660,7 +803,14 @@ def main():
         print("="*50)
         print(f"Restaurant: {data['restaurant_info']['name']}")
         print(f"Cuisine: {data['restaurant_info']['cuisine']}")
-        print(f"Menu Items Found: {len(data['menu_items'])}")
+        
+        # Count items by category
+        total_items = 0
+        for category, items in data.get('menu_categories', {}).items():
+            print(f"{category}: {len(items)} items")
+            total_items += len(items)
+        print(f"Total Menu Items: {total_items}")
+        
         print(f"Overall Rating: {data['reviews']['overall_rating']}")
         print(f"Individual Reviews: {len(data['reviews']['individual_reviews'])}")
         print("="*50)

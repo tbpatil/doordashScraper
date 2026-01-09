@@ -40,13 +40,16 @@ class DoorDashScraper:
         soup_initial = BeautifulSoup(self.driver.page_source, 'lxml')
         categories_map = self._map_categories(soup_initial)
         
+        # 1b. Also create a map using Selenium for more accurate positioning
+        selenium_sections = self._map_categories_selenium()
+        
         # 2. ACTIVE SCRAPE: Vertical Scroll
         # We scroll down slowly, parsing visible items at every step
-        self._active_vertical_scrape(categories_map)
+        self._active_vertical_scrape(categories_map, selenium_sections)
         
         # 3. ACTIVE SCRAPE: Horizontal Carousels
         # We find carousels and scroll them sideways, parsing at every step
-        self._active_horizontal_scrape(categories_map)
+        self._active_horizontal_scrape(categories_map, selenium_sections)
         
         # 4. Final Review Extraction
         reviews = self._extract_reviews(BeautifulSoup(self.driver.page_source, 'lxml'))
@@ -56,50 +59,135 @@ class DoorDashScraper:
             'menu_categories': self.master_menu,
             'reviews': reviews
         }
+    
+    def _map_categories_selenium(self):
+        """Create section map using Selenium for accurate positioning"""
+        sections_map = []
+        try:
+            # Find section headers using Selenium - be more specific to get menu sections
+            headers = self.driver.find_elements(By.CSS_SELECTOR, 
+                "h2[role='heading'], h2.sc-fubCfw, h2[class*='heading'], h2[class*='Title'], h3[role='heading']")
+            
+            # Filter out non-menu sections
+            excluded_sections = ['Most Popular', 'Trending Restaurants', 'Top Dishes Near Me', 
+                                'Trending Categories', 'Nearby Cities', 'Get to Know Us', 
+                                'Let Us Help You', 'Doing Business', 'Menu', 'Navigation', 'Header', 'Footer']
+            
+            for header in headers:
+                try:
+                    section_name = header.text.strip()
+                    if (section_name and len(section_name) > 2 and 
+                        section_name not in excluded_sections and
+                        section_name.lower() not in ['menu', 'navigation', 'header', 'footer']):
+                        location = header.location['y']
+                        sections_map.append({
+                            'name': section_name,
+                            'y_position': location,
+                            'element': header
+                        })
+                except:
+                    continue
+            
+            # Sort by position
+            sections_map.sort(key=lambda x: x['y_position'])
+            print(f"Selenium detected {len(sections_map)} menu sections: {[s['name'] for s in sections_map]}")
+        except Exception as e:
+            print(f"Error mapping categories with Selenium: {e}")
+        
+        return sections_map
 
     def _map_categories(self, soup):
-        """Creates a map of Line Numbers -> Category Names"""
+        """Creates a map of Line Numbers -> Category Names with improved detection"""
         headers_map = []
-        for h2 in soup.find_all('h2', attrs={'role': 'heading'}):
-            text = h2.get_text().strip()
-            if len(text) > 2 and text != "Menu":
-                headers_map.append({'line': h2.sourceline or 0, 'name': text})
         
+        # Filter out non-menu sections
+        excluded_sections = ['Most Popular', 'Trending Restaurants', 'Top Dishes Near Me', 
+                            'Trending Categories', 'Nearby Cities', 'Get to Know Us', 
+                            'Let Us Help You', 'Doing Business', 'Menu', 'Navigation', 'Header', 'Footer']
+        
+        # Try multiple selectors for section headers
+        header_selectors = [
+            ('h2', {'role': 'heading'}),
+            ('h2', {}),
+            ('h3', {'role': 'heading'}),
+            ('h3', {}),
+            ('div', {'class': re.compile(r'.*[Tt]itle.*')}),
+            ('div', {'data-testid': re.compile(r'.*section.*|.*category.*')})
+        ]
+        
+        seen_headers = set()
+        for tag, attrs in header_selectors:
+            for header in soup.find_all(tag, attrs=attrs):
+                try:
+                    text = header.get_text().strip()
+                    # Filter out generic headers, duplicates, and non-menu sections
+                    if (text and len(text) > 2 and 
+                        text not in excluded_sections and
+                        text.lower() not in ['menu', 'navigation', 'header', 'footer'] and
+                        text not in seen_headers):
+                        line_num = header.sourceline or 0
+                        headers_map.append({'line': line_num, 'name': text})
+                        seen_headers.add(text)
+                except:
+                    continue
+        
+        # Remove duplicates and sort by line number
+        unique_headers = {}
+        for h in headers_map:
+            if h['name'] not in unique_headers or h['line'] < unique_headers[h['name']]['line']:
+                unique_headers[h['name']] = h
+        
+        headers_map = list(unique_headers.values())
         headers_map.sort(key=lambda x: x['line'])
-        print(f"Detected {len(headers_map)} categories.")
+        print(f"Detected {len(headers_map)} menu categories: {[h['name'] for h in headers_map]}")
         return headers_map
 
-    def _active_vertical_scrape(self, headers_map):
+    def _active_vertical_scrape(self, headers_map, selenium_sections):
         """Scrolls down page in small chunks, scraping visible items."""
         print("Starting Active Vertical Scrape...")
         
         last_height = self.driver.execute_script("return document.body.scrollHeight")
         
-        # Scroll loop
-        for i in range(20): # Adjust range for very long menus
+        # Scroll loop - increased range and better scrolling
+        scroll_attempts = 0
+        max_scroll_attempts = 50
+        
+        while scroll_attempts < max_scroll_attempts:
             # 1. Capture current view
-            self._parse_current_view(headers_map)
+            self._parse_current_view(headers_map, selenium_sections)
             
-            # 2. Scroll down by ~800 pixels (approx one screen)
-            self.driver.execute_script("window.scrollBy(0, 800);")
-            time.sleep(1.5) # Wait for load
+            # Re-map sections periodically
+            if scroll_attempts % 5 == 0 and scroll_attempts > 0:
+                soup_temp = BeautifulSoup(self.driver.page_source, 'lxml')
+                headers_map = self._map_categories(soup_temp)
+                selenium_sections = self._map_categories_selenium()
+            
+            # 2. Scroll down by ~600 pixels (smaller increments to catch more)
+            self.driver.execute_script("window.scrollBy(0, 600);")
+            time.sleep(1.0) # Wait for load
             
             # 3. Check if reached bottom
             new_height = self.driver.execute_script("return document.body.scrollHeight")
             current_scroll = self.driver.execute_script("return window.scrollY + window.innerHeight")
             
-            if current_scroll >= new_height:
+            if current_scroll >= new_height - 100:  # Within 100px of bottom
                 # Double check by waiting a bit (lazy load might add length)
                 time.sleep(2)
                 new_height = self.driver.execute_script("return document.body.scrollHeight")
-                if current_scroll >= new_height:
+                if current_scroll >= new_height - 100:
+                    # One final parse at the bottom
+                    self._parse_current_view(headers_map, selenium_sections)
                     break
+            
+            scroll_attempts += 1
+        
+        print(f"Completed vertical scroll after {scroll_attempts} attempts")
         
         # Scroll back to top to prepare for horizontal check
         self.driver.execute_script("window.scrollTo(0, 0);")
         time.sleep(2)
 
-    def _active_horizontal_scrape(self, headers_map):
+    def _active_horizontal_scrape(self, headers_map, selenium_sections):
         """Finds carousels and scrolls them sideways while scraping."""
         print("Starting Active Horizontal Scrape...")
         
@@ -117,12 +205,12 @@ class DoorDashScraper:
                 if is_scrollable:
                     processed_count += 1
                     # It's a carousel! Scroll it left-to-right
-                    self._process_single_carousel(div, headers_map)
+                    self._process_single_carousel(div, headers_map, selenium_sections)
             except:
                 continue
         print(f"Scraped {processed_count} carousels.")
 
-    def _process_single_carousel(self, div_element, headers_map):
+    def _process_single_carousel(self, div_element, headers_map, selenium_sections):
         """Scrolls a single carousel to the end, scraping at each step."""
         prev_scroll = -1
         attempts = 0
@@ -130,7 +218,7 @@ class DoorDashScraper:
         while attempts < 10: # Safety break
             # 1. Scrape current view of this carousel
             # We grab the page source again to get the updated DOM state
-            self._parse_current_view(headers_map)
+            self._parse_current_view(headers_map, selenium_sections)
             
             # 2. Check position
             curr_scroll = self.driver.execute_script("return arguments[0].scrollLeft", div_element)
@@ -143,63 +231,316 @@ class DoorDashScraper:
             time.sleep(0.8) # Wait for items to render
             attempts += 1
 
-    def _parse_current_view(self, headers_map):
-        """Parses the CURRENT state of the DOM and adds new items to master_menu"""
+    def _parse_current_view(self, headers_map, selenium_sections):
+        """Parses the CURRENT state of the DOM and adds new items to master_menu with all required fields."""
         soup = BeautifulSoup(self.driver.page_source, 'lxml')
-        all_items = soup.find_all('div', attrs={'role': 'button'})
+
+        # Broaden the definition of a "menu item" so we don't miss anything.
+        # Many DoorDash items are rendered as "image-action-card" containers,
+        # and some use <a> tags instead of <div>.
+        # Also look for items with aria-label containing $ (price indicator)
+        all_items = soup.select(
+            "div[role='button'][aria-label*='$'], "
+            "a[role='button'][aria-label*='$'], "
+            "div[data-testid='image-action-card-container'], "
+            "a[data-testid='image-action-card-container'], "
+            "div[role='button'][aria-label], "
+            "a[role='button'][aria-label]"
+        )
+        
+        # Filter to only items that look like menu items
+        # Remove items that are clearly not menu items (navigation, buttons, etc.)
+        filtered_items = []
+        excluded_keywords = ['close', 'search', 'filter', 'sort', 'back', 'next', 'previous', 'cart', 'checkout', 'sign in', 'sign up']
+        
+        for item in all_items:
+            aria_label = item.get('aria-label', '')
+            if not aria_label:
+                # If no aria-label but it's an image-action-card, keep it
+                if item.get('data-testid') == 'image-action-card-container':
+                    filtered_items.append(item)
+                continue
+            
+            aria_lower = aria_label.lower()
+            # Skip items with excluded keywords (likely navigation/UI elements)
+            if any(keyword in aria_lower for keyword in excluded_keywords):
+                continue
+            
+            # Keep items that:
+            # 1. Have $ in aria-label (price indicator)
+            # 2. Are image-action-cards (DoorDash's main menu item container)
+            # 3. Have substantial aria-label (likely a menu item name)
+            if ('$' in aria_label or 
+                item.get('data-testid') == 'image-action-card-container' or
+                (len(aria_label) > 5 and not aria_lower.startswith('button'))):
+                filtered_items.append(item)
+        
+        all_items = filtered_items
+        
+        # Also get items using Selenium for better positioning and in case
+        # some dynamic elements don't show up cleanly in page_source yet.
+        try:
+            selenium_items = self.driver.find_elements(
+                By.CSS_SELECTOR,
+                "div[role='button'][aria-label], "
+                "a[role='button'][aria-label], "
+                "[data-testid='image-action-card-container']"
+            )
+        except Exception:
+            selenium_items = []
+        
+        # Create a mapping of aria-label to Selenium element for position lookup
+        selenium_item_map = {}
+        for sel_item in selenium_items:
+            try:
+                aria_label = sel_item.get_attribute('aria-label')
+                if aria_label:
+                    selenium_item_map[aria_label] = sel_item
+            except:
+                continue
         
         for item_div in all_items:
             try:
-                # 1. Validate Item
-                raw_label = item_div.get('aria-label')
-                if not raw_label: continue
+                # 1. Extract item data with all required fields
+                item_data = self._extract_item_data(item_div)
+                if not item_data or not item_data.get('name'):
+                    continue
                 
-                name = raw_label.split('$')[0].strip()
-                
-                # Deduplication Hash
-                item_hash = f"{name}"
+                # 2. Deduplication Hash
+                # Use both name and price in the hash so we don't accidentally
+                # drop items that share the same name but have different sizes/prices.
+                item_hash = f"{item_data['name']}|{item_data.get('price')}"
                 if item_hash in self.seen_hashes:
                     continue
                 
-                # 2. Extract Data
-                price = None
-                price_tag = item_div.find(string=re.compile(r'\$\d+'))
-                if price_tag: price = price_tag.strip()
-
-                image = None
-                img_tag = item_div.find('img')
-                if img_tag: image = img_tag.get('src')
+                # 3. Determine Category (Positional) - improved logic using both methods
+                assigned_category = "Featured Items"  # Default category
                 
-                # 3. Determine Category (Positional)
-                item_line = item_div.sourceline or 0
-                assigned_category = "Uncategorized"
+                # Try Selenium-based positioning first (more accurate for dynamic content)
+                if selenium_sections:
+                    try:
+                        # Find corresponding Selenium element
+                        aria_label = item_div.get('aria-label')
+                        if aria_label and aria_label in selenium_item_map:
+                            sel_element = selenium_item_map[aria_label]
+                            item_y = sel_element.location['y']
+                            
+                            # Find the section this item belongs to
+                            # Find the last section header that appears before this item
+                            for section in reversed(selenium_sections):
+                                if item_y >= section['y_position']:
+                                    assigned_category = section['name']
+                                    break
+                    except Exception as e:
+                        pass
                 
-                if headers_map:
-                    # Items with line number 0 (sometimes happens with dynamic elements) 
-                    # usually belong to the top carousel
-                    if item_line == 0 and headers_map:
-                         assigned_category = headers_map[0]['name']
-                    else:
-                        headers_above = [h for h in headers_map if h['line'] <= item_line]
-                        if headers_above:
-                            assigned_category = headers_above[-1]['name']
-                        else:
-                            assigned_category = headers_map[0]['name']
+                # Fallback to BeautifulSoup line-based method
+                if assigned_category == "Featured Items" and headers_map:
+                    item_line = item_div.sourceline or 0
+                    # Find the closest header that appears before this item
+                    best_header = None
+                    best_distance = float('inf')
+                    
+                    for header in headers_map:
+                        header_line = header['line']
+                        if item_line >= header_line:
+                            # Item is after this header
+                            distance = item_line - header_line
+                            if distance < best_distance:
+                                best_distance = distance
+                                best_header = header
+                    
+                    if best_header:
+                        assigned_category = best_header['name']
+                    elif headers_map and len(headers_map) > 0:
+                        # If item is before first header, use first header
+                        assigned_category = headers_map[0]['name']
+                
+                # Final fallback: if still "Featured Items", try to use context
+                if assigned_category == "Featured Items":
+                    # Try to find any valid menu section from headers_map
+                    if headers_map and len(headers_map) > 0:
+                        # Use the first menu section (usually "Featured Items" or "Most Ordered")
+                        for header in headers_map:
+                            header_name = header['name']
+                            # Skip generic/fallback sections
+                            if header_name not in ['Individual Items', 'Uncategorized']:
+                                assigned_category = header_name
+                                break
 
                 # 4. Add to Master List
                 if assigned_category not in self.master_menu:
                     self.master_menu[assigned_category] = []
                 
-                self.master_menu[assigned_category].append({
-                    'name': name,
-                    'price': price,
-                    'image': image
-                })
-                
+                self.master_menu[assigned_category].append(item_data)
                 self.seen_hashes.add(item_hash)
                 
-            except:
+                # Debug: print category assignment for first few items
+                if len(self.seen_hashes) <= 5:
+                    print(f"  Item '{item_data['name']}' assigned to '{assigned_category}'")
+                
+            except Exception as e:
+                print(f"Error parsing item: {e}")
                 continue
+    
+    def _extract_item_data(self, item_div):
+        """Extract all required fields from an item div"""
+        item_data = {
+            'name': None,
+            'description': None,
+            'price': None,
+            'rating': None,
+            'most_liked_tag': None,
+            'image': None,
+            'url': None
+        }
+        
+        try:
+            # Extract name from aria-label (most reliable)
+            raw_label = item_div.get('aria-label')
+            if raw_label:
+                # Name is usually everything before the $ sign
+                if '$' in raw_label:
+                    item_data['name'] = raw_label.split('$')[0].strip()
+                else:
+                    item_data['name'] = raw_label.strip()
+            
+            # If no name from aria-label, try other methods
+            if not item_data['name']:
+                # Try finding name in spans or divs
+                name_selectors = [
+                    'span[class*="name"]',
+                    'div[class*="name"]',
+                    'h3', 'h4',
+                    'span[class*="ItemName"]',
+                    'div[class*="ItemName"]'
+                ]
+                for selector in name_selectors:
+                    name_elem = item_div.select_one(selector)
+                    if name_elem:
+                        name_text = name_elem.get_text().strip()
+                        if name_text and len(name_text) > 0:
+                            item_data['name'] = name_text
+                            break
+            
+            # Extract price - multiple methods
+            # Method 1: From aria-label
+            if raw_label and '$' in raw_label:
+                price_match = re.search(r'\$[\d.]+', raw_label)
+                if price_match:
+                    item_data['price'] = price_match.group()
+            
+            # Method 2: Search for price pattern in text content
+            if not item_data['price']:
+                price_text = item_div.get_text()
+                price_match = re.search(r'\$[\d.]+', price_text)
+                if price_match:
+                    item_data['price'] = price_match.group()
+            
+            # Method 3: Look for specific price elements
+            if not item_data['price']:
+                price_elem = item_div.find(string=re.compile(r'\$[\d.]+'))
+                if price_elem:
+                    price_match = re.search(r'\$[\d.]+', price_elem)
+                    if price_match:
+                        item_data['price'] = price_match.group()
+            
+            # Method 4: Look in spans with price-related classes
+            if not item_data['price']:
+                price_selectors = [
+                    'span[class*="price"]',
+                    'div[class*="price"]',
+                    'span[class*="Price"]',
+                    '[data-testid*="price"]'
+                ]
+                for selector in price_selectors:
+                    price_elem = item_div.select_one(selector)
+                    if price_elem:
+                        price_text = price_elem.get_text()
+                        price_match = re.search(r'\$[\d.]+', price_text)
+                        if price_match:
+                            item_data['price'] = price_match.group()
+                            break
+            
+            # Extract description
+            desc_selectors = [
+                'p[class*="description"]',
+                'span[class*="description"]',
+                'div[class*="description"]',
+                '[data-testid*="description"]',
+                'p[class*="Description"]'
+            ]
+            for selector in desc_selectors:
+                desc_elem = item_div.select_one(selector)
+                if desc_elem:
+                    desc_text = desc_elem.get_text().strip()
+                    if desc_text and len(desc_text) > 0:
+                        item_data['description'] = desc_text
+                        break
+            
+            # Extract rating (e.g., "84% liked by 175 people" or star ratings)
+            rating_selectors = [
+                'span[class*="rating"]',
+                'div[class*="rating"]',
+                'span[class*="Rating"]',
+                'span[class*="like"]',
+                'div[class*="like"]',
+                'span[class*="percentage"]',
+                '[data-testid*="rating"]',
+                'span[aria-label*="star"]'
+            ]
+            for selector in rating_selectors:
+                rating_elem = item_div.select_one(selector)
+                if rating_elem:
+                    rating_text = rating_elem.get_text().strip()
+                    # Look for percentage or "liked" pattern
+                    if '%' in rating_text or 'liked' in rating_text.lower() or 'star' in rating_text.lower():
+                        item_data['rating'] = rating_text
+                        break
+            
+            # Extract "#1 most liked" tag or similar badges
+            tag_selectors = [
+                'div[data-testid*="tag"]',
+                'div[data-testid*="badge"]',
+                'div[class*="Tag"]',
+                'span[class*="tag"]',
+                'div[class*="badge"]',
+                'span[class*="badge"]',
+                'div[class*="Badge"]',
+                'div[class*="promo"]',
+                'span[class*="promo"]'
+            ]
+            for selector in tag_selectors:
+                tag_elems = item_div.select(selector)
+                for tag_elem in tag_elems:
+                    tag_text = tag_elem.get_text().strip()
+                    if tag_text:
+                        # Prioritize "#1 most liked" type tags
+                        if '#' in tag_text and 'most liked' in tag_text.lower():
+                            item_data['most_liked_tag'] = tag_text
+                            break
+                        # Also check for other promotional tags
+                        elif 'most liked' in tag_text.lower() or 'most' in tag_text.lower():
+                            if not item_data['most_liked_tag'] or 'most liked' not in item_data['most_liked_tag'].lower():
+                                item_data['most_liked_tag'] = tag_text
+                        # Other promotional tags
+                        elif len(tag_text) < 50 and tag_text not in ['$', '']:
+                            if not item_data['most_liked_tag']:
+                                item_data['most_liked_tag'] = tag_text
+                if item_data['most_liked_tag'] and 'most liked' in item_data['most_liked_tag'].lower():
+                    break
+            
+            # Extract image URL
+            img_tag = item_div.find('img')
+            if img_tag:
+                img_src = img_tag.get('src')
+                if img_src:
+                    item_data['image'] = img_src
+        
+        except Exception as e:
+            print(f"Error extracting item data: {e}")
+        
+        return item_data
 
     def _extract_info(self, soup):
         name = soup.find('h1')
