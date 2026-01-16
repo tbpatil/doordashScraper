@@ -54,9 +54,15 @@ class DoorDashScraper:
         # 4. Final Review Extraction
         reviews = self._extract_reviews(BeautifulSoup(self.driver.page_source, 'lxml'))
         
+        # 5. Reorganize items into proper sections
+        organized_menu = self._reorganize_by_sections()
+        
+        # Get restaurant info with URL
+        restaurant_info = self._extract_info(soup_initial, url)
+        
         return {
-            'restaurant_info': self._extract_info(soup_initial),
-            'menu_categories': self.master_menu,
+            'restaurant_info': restaurant_info,
+            'menu_categories': organized_menu,
             'reviews': reviews
         }
     
@@ -68,8 +74,8 @@ class DoorDashScraper:
             headers = self.driver.find_elements(By.CSS_SELECTOR, 
                 "h2[role='heading'], h2.sc-fubCfw, h2[class*='heading'], h2[class*='Title'], h3[role='heading']")
             
-            # Filter out non-menu sections
-            excluded_sections = ['Most Popular', 'Trending Restaurants', 'Top Dishes Near Me', 
+            # Filter out non-menu sections (keep Most Ordered and Most Popular)
+            excluded_sections = ['Trending Restaurants', 'Top Dishes Near Me', 
                                 'Trending Categories', 'Nearby Cities', 'Get to Know Us', 
                                 'Let Us Help You', 'Doing Business', 'Menu', 'Navigation', 'Header', 'Footer']
             
@@ -100,8 +106,8 @@ class DoorDashScraper:
         """Creates a map of Line Numbers -> Category Names with improved detection"""
         headers_map = []
         
-        # Filter out non-menu sections
-        excluded_sections = ['Most Popular', 'Trending Restaurants', 'Top Dishes Near Me', 
+        # Filter out non-menu sections (keep Most Ordered and Most Popular)
+        excluded_sections = ['Trending Restaurants', 'Top Dishes Near Me', 
                             'Trending Categories', 'Nearby Cities', 'Get to Know Us', 
                             'Let Us Help You', 'Doing Business', 'Menu', 'Navigation', 'Header', 'Footer']
         
@@ -357,14 +363,14 @@ class DoorDashScraper:
                         assigned_category = headers_map[0]['name']
                 
                 # Final fallback: if still "Featured Items", try to use context
+                # Don't assign to "Most Ordered" or "Most Popular" by default - let reorganization handle it
                 if assigned_category == "Featured Items":
-                    # Try to find any valid menu section from headers_map
+                    # Try to find any valid menu section from headers_map (excluding Most Ordered/Most Popular)
                     if headers_map and len(headers_map) > 0:
-                        # Use the first menu section (usually "Featured Items" or "Most Ordered")
                         for header in headers_map:
                             header_name = header['name']
-                            # Skip generic/fallback sections
-                            if header_name not in ['Individual Items', 'Uncategorized']:
+                            # Skip generic/fallback sections and Most Ordered/Most Popular (let reorganization handle those)
+                            if header_name not in ['Individual Items', 'Uncategorized', 'Most Ordered', 'Most Popular']:
                                 assigned_category = header_name
                                 break
 
@@ -542,9 +548,294 @@ class DoorDashScraper:
         
         return item_data
 
-    def _extract_info(self, soup):
-        name = soup.find('h1')
-        return {'name': name.get_text().strip() if name else "Unknown"}
+    def _extract_info(self, soup, url):
+        """Extract restaurant information including name, URL, and cuisine"""
+        info = {
+            'name': None,
+            'url': url,
+            'cuisine': None,
+            'price_range': None
+        }
+        
+        # Extract restaurant name
+        try:
+            name = soup.find('h1')
+            if name:
+                info['name'] = name.get_text().strip()
+        except:
+            pass
+        
+        # Extract cuisine and price range - try multiple selectors
+        try:
+            # Look for cuisine information
+            cuisine_selectors = [
+                "span[class*='cuisine']",
+                "div[class*='cuisine']",
+                "[data-testid*='cuisine']",
+                "[class*='Cuisine']"
+            ]
+            
+            for selector in cuisine_selectors:
+                try:
+                    elements = soup.select(selector)
+                    for elem in elements:
+                        text = elem.get_text().strip()
+                        # Filter for reasonable cuisine text
+                        if text and len(text) < 100 and 'cuisine' in text.lower():
+                            info['cuisine'] = text
+                            break
+                except:
+                    continue
+            
+            # Also try to extract from page text - look for patterns like "Fast Food", "American", etc.
+            if not info['cuisine']:
+                page_text = soup.get_text()
+                # Common cuisine patterns
+                cuisine_patterns = ['Fast Food', 'American', 'Italian', 'Chinese', 'Mexican', 'Japanese']
+                for pattern in cuisine_patterns:
+                    if pattern in page_text[:5000]:  # Check first 5000 chars
+                        info['cuisine'] = pattern
+                        break
+            
+            # Extract price range (if available) - look for $ symbols indicating price level
+            price_indicators = soup.find_all(string=re.compile(r'\$\$\$|\$\$|\$'))
+            if price_indicators:
+                # DoorDash sometimes shows price range like "$$" or "$"
+                price_text = price_indicators[0].strip()
+                if price_text:
+                    info['price_range'] = price_text
+                    
+        except Exception as e:
+            print(f"Error extracting restaurant info: {e}")
+        
+        return info
+    
+    def _reorganize_by_sections(self):
+        """Reorganize all scraped items into proper sections based on item names and detected sections"""
+        # Define category keywords for intelligent categorization
+        # Order matters - more specific categories first
+        category_keywords = {
+            'Happy Meal': ['happy meal'],
+            'Fish': ['fish', 'filet-o-fish'],
+            'Fries': ['fries', 'french fries'],
+            'Shareables': ['pack', '40 pc', 'combo pack', 'chicken pack', 'burger pack', 'favorites for 4', 'classic', 'quarter pounder pack', 'big mac pack'],
+            'McCafé® Coffees': ['latte', 'frappé', 'frappe', 'cappuccino', 'mocha', 'caramel', 'café', 'premium roast', 'french vanilla', 'iced french vanilla', 'iced caramel', 'iced mocha', 'iced latte', 'iced coffee', 'premium hot chocolate', 'premium roast'],
+            'Sweets & Treats': ['mcflurry', 'shake', 'cookie', 'sundae', 'ice cream', 'holiday pie', 'apple pie', 'strawberry & crème', 'vanilla shake', 'chocolate shake', 'strawberry shake'],
+            'Burgers': ['burger', 'quarter pounder', 'big mac', 'mcdouble', 'double', 'cheeseburger', 'hamburger', 'daily double', 'bacon quarter', 'triple', 'bacon mcdouble'],
+            'Chicken': ['chicken', 'mcnuggets', 'mccrispy', 'mcchicken', 'chicken strips', 'nuggets', 'snack wrap', 'mccrispy strips', 'mccrispy™ strips', 'mccrispy™ meal', 'spicy mccrispy', 'deluxe mccrispy', 'chicken mcnugget', 'piece mccrispy', 'mccrispy™ strips meal'],
+            'Beverages': ['coke', 'sprite', 'dr pepper', 'diet', 'iced tea', 'lemonade', 'juice', 'water', 'smoothie', 'fanta', 'powerade', 'orange juice', 'apple juice', 'milk', 'hot tea', 'dasani', 'chocolate milk', 'hi-c', 'sweet iced tea', 'unsweetened iced tea', 'frozen'],
+            'Condiments': ['napkin', 'spoon', 'fork', 'ketchup', 'mustard', 'mayo', 'salt', 'pepper', 'sugar', 'creamer', 'straw', 'syrup', 'dipping sauce', 'salsa', 'preserve', 'stirrer', 'splenda', 'butter', 'hot mustard', 'strip dip'],
+            'Sides & More': ['apple slices', 'salad', 'bacon strips', 'apple'],
+            'Extra Value Meals': ['meal']  # Items with "Meal" in name
+        }
+        
+        # Final organized menu
+        organized = {}
+        
+        # Get all items from current master_menu
+        # Collect all items together, but track which were explicitly in "Most Ordered" or "Most Popular"
+        most_ordered_item_names = set()
+        most_popular_item_names = set()
+        all_items = []
+        
+        # First pass: track items that were explicitly in Most Ordered/Most Popular
+        for section_name, items in self.master_menu.items():
+            if section_name == 'Most Ordered':
+                for item in items:
+                    item_key = f"{item.get('name')}|{item.get('price')}"
+                    most_ordered_item_names.add(item_key)
+                    all_items.append(item)
+            elif section_name == 'Most Popular':
+                for item in items:
+                    item_key = f"{item.get('name')}|{item.get('price')}"
+                    most_popular_item_names.add(item_key)
+                    all_items.append(item)
+            else:
+                all_items.extend(items)
+        
+        # Remove duplicates based on name+price
+        seen = set()
+        unique_items = []
+        for item in all_items:
+            item_key = f"{item.get('name')}|{item.get('price')}"
+            if item_key not in seen:
+                seen.add(item_key)
+                unique_items.append(item)
+        
+        # Categorize each item
+        for item in unique_items:
+            item_key = f"{item.get('name')}|{item.get('price')}"
+            item_name = item.get('name', '').lower()
+            categorized = False
+            is_meal = 'meal' in item_name
+            has_promo_tag = item.get('most_liked_tag') is not None
+            
+            # Check if this item was explicitly in "Most Ordered" or "Most Popular" during scraping
+            was_in_most_ordered = item_key in most_ordered_item_names
+            was_in_most_popular = item_key in most_popular_item_names
+            
+            # Priority 1: Items explicitly in "Most Ordered" or "Most Popular" stay there
+            if was_in_most_ordered:
+                if 'Most Ordered' not in organized:
+                    organized['Most Ordered'] = []
+                organized['Most Ordered'].append(item)
+                categorized = True
+                continue
+            elif was_in_most_popular:
+                if 'Most Popular' not in organized:
+                    organized['Most Popular'] = []
+                organized['Most Popular'].append(item)
+                categorized = True
+                continue
+            
+            # Priority 2: Happy Meal (most specific)
+            if 'happy meal' in item_name:
+                if 'Happy Meal' not in organized:
+                    organized['Happy Meal'] = []
+                organized['Happy Meal'].append(item)
+                categorized = True
+                continue
+            
+            # Priority 3: Find content category FIRST (before meals/featured logic)
+            # This allows items to be in both their content category AND meals/featured
+            # Check Chicken first (before Shareables) since "40 pc" matches Shareables but chicken items should be in Chicken
+            content_category = None
+            shareable_category = None
+            
+            # First, check if it's a chicken item (before checking Shareables)
+            if any(kw in item_name for kw in ['mccrispy', 'mcchicken', 'mcnuggets', 'chicken', 'nuggets', 'snack wrap']):
+                content_category = 'Chicken'
+            
+            # Check Shareables (items can be in both Chicken AND Shareables)
+            if any(kw in item_name for kw in ['pack', '40 pc', 'combo pack', 'chicken pack', 'burger pack', 'favorites for 4', 'classic', 'quarter pounder pack', 'big mac pack']) and not any(kw in item_name for kw in ['& 2 large fries', '& 2 medium fries']):
+                shareable_category = 'Shareables'
+            
+            # If not chicken, check other content categories
+            if not content_category:
+                for category, keywords in category_keywords.items():
+                    if category in ['Extra Value Meals', 'Happy Meal', 'Chicken', 'Shareables']:
+                        continue  # Skip these (already handled)
+                    
+                    for keyword in keywords:
+                        if keyword in item_name:
+                            # Skip "pie" keyword for Sweets if item contains "piece" (likely chicken strips)
+                            if category == 'Sweets & Treats' and keyword == 'pie' and 'piece' in item_name:
+                                continue
+                            content_category = category
+                            break
+                    
+                    if content_category:
+                        break
+            
+            # Priority 4: Meals go to "Extra Value Meals" (unless Happy Meal)
+            # Also add to content category if applicable
+            if is_meal:
+                if 'Extra Value Meals' not in organized:
+                    organized['Extra Value Meals'] = []
+                organized['Extra Value Meals'].append(item)
+                categorized = True
+                
+                # Also add meals to their content category (Chicken, Burgers, Fish, etc.)
+                if content_category and content_category in ['Chicken', 'Burgers', 'Fish', 'Fries']:
+                    if content_category not in organized:
+                        organized[content_category] = []
+                    if item not in organized[content_category]:
+                        organized[content_category].append(item)
+                
+                # Also add to Shareables if applicable
+                if shareable_category:
+                    if shareable_category not in organized:
+                        organized[shareable_category] = []
+                    if item not in organized[shareable_category]:
+                        organized[shareable_category].append(item)
+            
+            # Priority 5: Items with promotional tags go to "Featured Items"
+            # Also add to content category if applicable
+            elif has_promo_tag:
+                if 'Featured Items' not in organized:
+                    organized['Featured Items'] = []
+                organized['Featured Items'].append(item)
+                categorized = True
+                
+                # Also add featured items to their content category
+                if content_category:
+                    if content_category not in organized:
+                        organized[content_category] = []
+                    if item not in organized[content_category]:
+                        organized[content_category].append(item)
+                
+                # Also add to Shareables if applicable
+                if shareable_category:
+                    if shareable_category not in organized:
+                        organized[shareable_category] = []
+                    if item not in organized[shareable_category]:
+                        organized[shareable_category].append(item)
+            
+            # Priority 6: For non-meal, non-featured items, add to content category
+            elif content_category or shareable_category:
+                if content_category:
+                    if content_category not in organized:
+                        organized[content_category] = []
+                    organized[content_category].append(item)
+                    categorized = True
+                
+                # Also add to Shareables if applicable (items can be in both)
+                if shareable_category:
+                    if shareable_category not in organized:
+                        organized[shareable_category] = []
+                    if item not in organized[shareable_category]:
+                        organized[shareable_category].append(item)
+                    categorized = True
+            
+            # Final fallback: put in "Individual Items"
+            if not categorized:
+                if 'Individual Items' not in organized:
+                    organized['Individual Items'] = []
+                organized['Individual Items'].append(item)
+        
+        # Sort categories in preferred order (exactly as requested)
+        preferred_order = [
+            'Featured Items',
+            'Most Ordered',
+            'Extra Value Meals',
+            'Burgers',
+            'Chicken',
+            'Fish',
+            'Fries',
+            'Happy Meal',
+            'Beverages',
+            'Sweets & Treats',
+            'McCafé® Coffees',
+            'Shareables',
+            'Condiments',
+            'Sides & More',
+            'Individual Items',
+            'Most Popular'
+        ]
+        
+        # Items in Most Ordered/Most Popular are already handled in the categorization loop above
+        
+        # Create final ordered dictionary
+        final_menu = {}
+        for category in preferred_order:
+            if category in organized and len(organized[category]) > 0:
+                final_menu[category] = organized[category]
+            # Always include "Most Ordered" and "Most Popular" even if empty
+            elif category in ['Most Ordered', 'Most Popular']:
+                final_menu[category] = []
+        
+        # Add any remaining categories not in preferred order
+        for category, items in organized.items():
+            if category not in final_menu and len(items) > 0:
+                final_menu[category] = items
+        
+        # Ensure "Most Ordered" and "Most Popular" exist even if empty
+        if 'Most Ordered' not in final_menu:
+            final_menu['Most Ordered'] = []
+        if 'Most Popular' not in final_menu:
+            final_menu['Most Popular'] = []
+        
+        return final_menu
 
     def _extract_reviews(self, soup):
         rating = "None"
