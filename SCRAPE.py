@@ -312,6 +312,15 @@ class DoorDashScraper:
                 if not item_data or not item_data.get('name'):
                     continue
                 
+                # 1b. If no rating found from BeautifulSoup, try Selenium extraction
+                if not item_data.get('rating_count'):
+                    aria_label = item_div.get('aria-label')
+                    if aria_label and aria_label in selenium_item_map:
+                        sel_element = selenium_item_map[aria_label]
+                        selenium_rating = self._extract_rating_selenium(sel_element)
+                        if selenium_rating:
+                            item_data.update(selenium_rating)
+                
                 # 2. Deduplication Hash
                 # Use both name and price in the hash so we don't accidentally
                 # drop items that share the same name but have different sizes/prices.
@@ -389,13 +398,80 @@ class DoorDashScraper:
                 print(f"Error parsing item: {e}")
                 continue
     
+    def _extract_rating_selenium(self, selenium_element):
+        """Extract rating data from a Selenium element"""
+        rating_data = {}
+        try:
+            # Get all text from the element
+            text = selenium_element.text
+            aria_label = selenium_element.get_attribute('aria-label') or ''
+            
+            # Check both text and aria-label
+            for check_text in [text, aria_label]:
+                if not check_text:
+                    continue
+                
+                # Pattern 1: "XX% (XXX)" format
+                match1 = re.search(r'(\d{1,3})%\s*\((\d+[,\d]*)\)', check_text)
+                if match1:
+                    rating_data['rating_percentage'] = f"{match1.group(1)}%"
+                    rating_data['rating_count'] = int(match1.group(2).replace(',', ''))
+                    rating_data['rating_text'] = match1.group(0)
+                    return rating_data
+                
+                # Pattern 2: "XX% liked by XXX people"
+                match2 = re.search(r'(\d{1,3})%\s*(?:liked\s*by\s*)?(\d+[,\d]*)\s*(?:people)?', check_text, re.IGNORECASE)
+                if match2:
+                    rating_data['rating_percentage'] = f"{match2.group(1)}%"
+                    rating_data['rating_count'] = int(match2.group(2).replace(',', ''))
+                    rating_data['rating_text'] = match2.group(0)
+                    return rating_data
+            
+            # Try finding child elements with rating info
+            try:
+                rating_children = selenium_element.find_elements(
+                    By.CSS_SELECTOR,
+                    '[class*="rating"], [class*="Rating"], [class*="like"], [class*="Like"], span[aria-label*="rating"]'
+                )
+                
+                for child in rating_children:
+                    child_text = child.text
+                    child_aria = child.get_attribute('aria-label') or ''
+                    
+                    for check_text in [child_text, child_aria]:
+                        if not check_text:
+                            continue
+                        
+                        match = re.search(r'(\d{1,3})%\s*\((\d+[,\d]*)\)', check_text)
+                        if match:
+                            rating_data['rating_percentage'] = f"{match.group(1)}%"
+                            rating_data['rating_count'] = int(match.group(2).replace(',', ''))
+                            rating_data['rating_text'] = match.group(0)
+                            return rating_data
+                        
+                        match2 = re.search(r'(\d{1,3})%\s*(?:liked\s*by\s*)?(\d+[,\d]*)', check_text, re.IGNORECASE)
+                        if match2:
+                            rating_data['rating_percentage'] = f"{match2.group(1)}%"
+                            rating_data['rating_count'] = int(match2.group(2).replace(',', ''))
+                            rating_data['rating_text'] = match2.group(0)
+                            return rating_data
+            except:
+                pass
+                
+        except Exception as e:
+            pass
+        
+        return rating_data if rating_data else None
+
     def _extract_item_data(self, item_div):
         """Extract all required fields from an item div"""
         item_data = {
             'name': None,
             'description': None,
             'price': None,
-            'rating': None,
+            'rating_percentage': 'NA',  # e.g., "84%" or "NA" if not available
+            'rating_count': 'NA',  # e.g., 175 or "NA" if not available
+            'rating_text': None,  # e.g., "84% (175)" - full rating text
             'most_liked_tag': None,
             'image': None,
             'url': None
@@ -405,11 +481,21 @@ class DoorDashScraper:
             # Extract name from aria-label (most reliable)
             raw_label = item_div.get('aria-label')
             if raw_label:
+                # Clean up the label - remove "Choose options to determine price" text
+                clean_label = raw_label.replace('Choose options to determine price', '').strip()
+                
                 # Name is usually everything before the $ sign
-                if '$' in raw_label:
-                    item_data['name'] = raw_label.split('$')[0].strip()
+                if '$' in clean_label:
+                    item_data['name'] = clean_label.split('$')[0].strip()
+                    # Also extract price from aria-label
+                    price_match = re.search(r'\$[\d.]+', clean_label)
+                    if price_match:
+                        item_data['price'] = price_match.group()
                 else:
-                    item_data['name'] = raw_label.strip()
+                    item_data['name'] = clean_label.strip()
+                    # Mark items with variable pricing
+                    if 'Choose options' in raw_label:
+                        item_data['price'] = 'Variable'
             
             # If no name from aria-label, try other methods
             if not item_data['name']:
@@ -484,7 +570,36 @@ class DoorDashScraper:
                         item_data['description'] = desc_text
                         break
             
-            # Extract rating (e.g., "84% liked by 175 people" or star ratings)
+            # Extract rating - looking for patterns like "84% (175)" or "84% liked by 175 people"
+            # DoorDash shows item ratings as percentage + count
+            all_text = item_div.get_text()
+            
+            # Pattern 1: "XX% (XXX)" format - e.g., "84% (175)"
+            rating_pattern1 = re.search(r'(\d{1,3})%\s*\((\d+[,\d]*)\)', all_text)
+            if rating_pattern1:
+                item_data['rating_percentage'] = f"{rating_pattern1.group(1)}%"
+                item_data['rating_count'] = int(rating_pattern1.group(2).replace(',', ''))
+                item_data['rating_text'] = rating_pattern1.group(0)
+            
+            # Pattern 2: "XX% liked by XXX people" format
+            if not item_data['rating_percentage']:
+                rating_pattern2 = re.search(r'(\d{1,3})%\s*(?:liked\s*by\s*)?(\d+[,\d]*)\s*(?:people)?', all_text, re.IGNORECASE)
+                if rating_pattern2:
+                    item_data['rating_percentage'] = f"{rating_pattern2.group(1)}%"
+                    item_data['rating_count'] = int(rating_pattern2.group(2).replace(',', ''))
+                    item_data['rating_text'] = rating_pattern2.group(0)
+            
+            # Pattern 3: Just percentage "XX%" - count may be in separate element
+            if not item_data['rating_percentage']:
+                rating_pattern3 = re.search(r'(\d{1,3})%', all_text)
+                if rating_pattern3:
+                    # Make sure it's a reasonable percentage (not a price or other number)
+                    pct = int(rating_pattern3.group(1))
+                    if 1 <= pct <= 100:
+                        item_data['rating_percentage'] = f"{pct}%"
+                        item_data['rating_text'] = rating_pattern3.group(0)
+            
+            # Also search using selectors for more structured rating data
             rating_selectors = [
                 'span[class*="rating"]',
                 'div[class*="rating"]',
@@ -493,16 +608,43 @@ class DoorDashScraper:
                 'div[class*="like"]',
                 'span[class*="percentage"]',
                 '[data-testid*="rating"]',
-                'span[aria-label*="star"]'
+                '[data-testid*="like"]',
+                'span[aria-label*="star"]',
+                'span[aria-label*="rating"]',
+                'span[aria-label*="liked"]'
             ]
+            
             for selector in rating_selectors:
-                rating_elem = item_div.select_one(selector)
-                if rating_elem:
+                rating_elems = item_div.select(selector)
+                for rating_elem in rating_elems:
                     rating_text = rating_elem.get_text().strip()
-                    # Look for percentage or "liked" pattern
-                    if '%' in rating_text or 'liked' in rating_text.lower() or 'star' in rating_text.lower():
-                        item_data['rating'] = rating_text
+                    aria_label = rating_elem.get('aria-label', '')
+                    
+                    # Check both text and aria-label
+                    for text_to_check in [rating_text, aria_label]:
+                        if not text_to_check:
+                            continue
+                        
+                        # Try to parse "XX% (XXX)" or "XX% liked by XXX"
+                        match1 = re.search(r'(\d{1,3})%\s*\((\d+[,\d]*)\)', text_to_check)
+                        if match1:
+                            item_data['rating_percentage'] = f"{match1.group(1)}%"
+                            item_data['rating_count'] = int(match1.group(2).replace(',', ''))
+                            item_data['rating_text'] = match1.group(0)
+                            break
+                        
+                        match2 = re.search(r'(\d{1,3})%\s*(?:liked\s*by\s*)?(\d+[,\d]*)\s*(?:people)?', text_to_check, re.IGNORECASE)
+                        if match2:
+                            item_data['rating_percentage'] = f"{match2.group(1)}%"
+                            item_data['rating_count'] = int(match2.group(2).replace(',', ''))
+                            item_data['rating_text'] = match2.group(0)
+                            break
+                    
+                    if item_data['rating_count']:
                         break
+                
+                if item_data['rating_count']:
+                    break
             
             # Extract "#1 most liked" tag or similar badges
             tag_selectors = [
@@ -838,12 +980,126 @@ class DoorDashScraper:
         return final_menu
 
     def _extract_reviews(self, soup):
-        rating = "None"
+        """Extract restaurant-level rating info including total likes/ratings"""
+        reviews_data = {
+            'overall_rating': None,  # e.g., "4.5"
+            'total_ratings': None,   # Total number of ratings/reviews
+            'total_likes': None,     # Total likes if available
+            'rating_text': None      # Full rating text e.g., "4.5 (1,234 ratings)"
+        }
+        
         try:
+            # Method 1: Look for rating in specific format "X.X"
             rating_tag = soup.find('span', string=re.compile(r'^\d\.\d$'))
-            if rating_tag: rating = rating_tag.get_text()
-        except: pass
-        return {'overall_rating': rating}
+            if rating_tag:
+                reviews_data['overall_rating'] = rating_tag.get_text()
+            
+            # Method 2: Search for rating patterns in aria-labels
+            rating_elements = soup.find_all(attrs={'aria-label': re.compile(r'rating|star|review', re.IGNORECASE)})
+            for elem in rating_elements:
+                aria_label = elem.get('aria-label', '')
+                text = elem.get_text().strip()
+                
+                # Try to extract rating from aria-label
+                rating_match = re.search(r'(\d\.\d)\s*(?:out of\s*5|stars?)?', aria_label, re.IGNORECASE)
+                if rating_match and not reviews_data['overall_rating']:
+                    reviews_data['overall_rating'] = rating_match.group(1)
+                
+                # Try to extract rating count
+                count_match = re.search(r'(\d+[,\d]*)\s*(?:ratings?|reviews?)', aria_label, re.IGNORECASE)
+                if count_match:
+                    reviews_data['total_ratings'] = int(count_match.group(1).replace(',', ''))
+            
+            # Method 3: Search page text for rating patterns
+            page_text = soup.get_text()
+            
+            # Pattern: "4.5 (1,234 ratings)" or "4.5 • 1,234 ratings"
+            rating_pattern = re.search(r'(\d\.\d)\s*(?:\(|•|·)\s*(\d+[,\d]*)\s*(?:ratings?|reviews?)', page_text, re.IGNORECASE)
+            if rating_pattern:
+                if not reviews_data['overall_rating']:
+                    reviews_data['overall_rating'] = rating_pattern.group(1)
+                if not reviews_data['total_ratings']:
+                    reviews_data['total_ratings'] = int(rating_pattern.group(2).replace(',', ''))
+                reviews_data['rating_text'] = rating_pattern.group(0)
+            
+            # Pattern: "X,XXX+ ratings" or "X,XXX ratings"
+            if not reviews_data['total_ratings']:
+                count_pattern = re.search(r'(\d+[,\d]*)\+?\s*(?:ratings?|reviews?)', page_text, re.IGNORECASE)
+                if count_pattern:
+                    reviews_data['total_ratings'] = int(count_pattern.group(1).replace(',', ''))
+            
+            # Method 4: Look for specific store rating selectors
+            rating_selectors = [
+                '[data-testid="store-rating"]',
+                '[class*="store-rating"]',
+                '[class*="StoreRating"]',
+                '[class*="rating"]',
+                'span[class*="Rating"]'
+            ]
+            
+            for selector in rating_selectors:
+                elems = soup.select(selector)
+                for elem in elems:
+                    text = elem.get_text().strip()
+                    
+                    # Extract rating value
+                    if not reviews_data['overall_rating']:
+                        rating_match = re.search(r'(\d\.\d)', text)
+                        if rating_match:
+                            reviews_data['overall_rating'] = rating_match.group(1)
+                    
+                    # Extract count
+                    if not reviews_data['total_ratings']:
+                        count_match = re.search(r'(\d+[,\d]*)\s*(?:ratings?|reviews?|\+)?', text)
+                        if count_match:
+                            reviews_data['total_ratings'] = int(count_match.group(1).replace(',', ''))
+            
+            # Method 5: Use Selenium to find ratings more accurately
+            try:
+                # Look for elements with rating info using Selenium
+                rating_elements_sel = self.driver.find_elements(
+                    By.CSS_SELECTOR,
+                    '[data-testid*="rating"], [aria-label*="rating"], [class*="rating"], [class*="Rating"]'
+                )
+                
+                for elem in rating_elements_sel:
+                    text = elem.text.strip()
+                    aria_label = elem.get_attribute('aria-label') or ''
+                    
+                    for check_text in [text, aria_label]:
+                        if not check_text:
+                            continue
+                        
+                        # Pattern: "4.5 (1,234 ratings)"
+                        full_match = re.search(r'(\d\.\d)\s*(?:\(|•|·)\s*(\d+[,\d]*)\s*(?:ratings?|reviews?)', check_text, re.IGNORECASE)
+                        if full_match:
+                            reviews_data['overall_rating'] = full_match.group(1)
+                            reviews_data['total_ratings'] = int(full_match.group(2).replace(',', ''))
+                            reviews_data['rating_text'] = full_match.group(0)
+                            break
+                        
+                        # Just rating
+                        if not reviews_data['overall_rating']:
+                            rating_match = re.search(r'(\d\.\d)', check_text)
+                            if rating_match:
+                                reviews_data['overall_rating'] = rating_match.group(1)
+                        
+                        # Just count
+                        if not reviews_data['total_ratings']:
+                            count_match = re.search(r'(\d+[,\d]*)\+?\s*(?:ratings?|reviews?)', check_text, re.IGNORECASE)
+                            if count_match:
+                                reviews_data['total_ratings'] = int(count_match.group(1).replace(',', ''))
+                    
+                    if reviews_data['overall_rating'] and reviews_data['total_ratings']:
+                        break
+                        
+            except Exception as e:
+                print(f"Selenium rating extraction error: {e}")
+        
+        except Exception as e:
+            print(f"Error extracting reviews: {e}")
+        
+        return reviews_data
 
     def close(self):
         try: self.driver.quit()
@@ -860,15 +1116,38 @@ def main():
             print("\n" + "="*50)
             print(f"SUCCESS: {data['restaurant_info']['name']}")
             
+            # Show restaurant-level ratings
+            reviews = data.get('reviews', {})
+            print(f"\n⭐ RESTAURANT RATINGS:")
+            print(f"   Overall Rating: {reviews.get('overall_rating', 'N/A')}")
+            print(f"   Total Ratings: {reviews.get('total_ratings', 'N/A')}")
+            if reviews.get('rating_text'):
+                print(f"   Rating Text: {reviews.get('rating_text')}")
+            
             total = 0
+            items_with_ratings = 0
             for cat, items in data['menu_categories'].items():
                 print(f"\n📁 {cat} ({len(items)} items)")
                 total += len(items)
                 
-            print(f"\nTOTAL ITEMS SCRAPED: {total}")
+                # Count items with ratings
+                for item in items:
+                    if item.get('rating_count'):
+                        items_with_ratings += 1
+                        
+                # Show a few items with ratings as examples
+                rated_items = [i for i in items if i.get('rating_count')]
+                if rated_items:
+                    for item in rated_items[:2]:  # Show up to 2 examples per category
+                        print(f"   └─ {item['name']}: {item.get('rating_percentage', 'N/A')} ({item.get('rating_count', 'N/A')} ratings)")
+                
+            print(f"\n📊 SUMMARY:")
+            print(f"   Total Items Scraped: {total}")
+            print(f"   Items with Ratings: {items_with_ratings}")
             
             with open('doordash_final_v12.json', 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
+            print(f"\n✅ Data saved to doordash_final_v12.json")
     finally:
         scraper.close()
 
