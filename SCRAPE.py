@@ -43,13 +43,17 @@ class DoorDashScraper:
         # 1b. Also create a map using Selenium for more accurate positioning
         selenium_sections = self._map_categories_selenium()
         
-        # 2. ACTIVE SCRAPE: Vertical Scroll
-        # We scroll down slowly, parsing visible items at every step
-        self._active_vertical_scrape(categories_map, selenium_sections)
+        # 2. CATEGORY-BASED SCRAPE (preferred for full menus)
+        # Click each category and scroll the menu container to load all items.
+        category_scraped = self._scrape_by_categories(categories_map, selenium_sections)
         
-        # 3. ACTIVE SCRAPE: Horizontal Carousels
-        # We find carousels and scroll them sideways, parsing at every step
-        self._active_horizontal_scrape(categories_map, selenium_sections)
+        # 3. FALLBACK: Vertical + Horizontal scrape (kept for robustness)
+        if not category_scraped:
+            # We scroll down slowly, parsing visible items at every step
+            self._active_vertical_scrape(categories_map, selenium_sections)
+            
+            # We find carousels and scroll them sideways, parsing at every step
+            self._active_horizontal_scrape(categories_map, selenium_sections)
         
         # 4. Final Review Extraction
         reviews = self._extract_reviews(BeautifulSoup(self.driver.page_source, 'lxml'))
@@ -160,7 +164,8 @@ class DoorDashScraper:
         
         while scroll_attempts < max_scroll_attempts:
             # 1. Capture current view
-            self._parse_current_view(headers_map, selenium_sections)
+            self._parse_current_view(headers_map, selenium_sections, forced_category=None)
+            self._click_show_more_buttons()
             
             # Re-map sections periodically
             if scroll_attempts % 5 == 0 and scroll_attempts > 0:
@@ -182,7 +187,7 @@ class DoorDashScraper:
                 new_height = self.driver.execute_script("return document.body.scrollHeight")
                 if current_scroll >= new_height - 100:
                     # One final parse at the bottom
-                    self._parse_current_view(headers_map, selenium_sections)
+                    self._parse_current_view(headers_map, selenium_sections, forced_category=None)
                     break
             
             scroll_attempts += 1
@@ -224,7 +229,7 @@ class DoorDashScraper:
         while attempts < 10: # Safety break
             # 1. Scrape current view of this carousel
             # We grab the page source again to get the updated DOM state
-            self._parse_current_view(headers_map, selenium_sections)
+            self._parse_current_view(headers_map, selenium_sections, forced_category=None)
             
             # 2. Check position
             curr_scroll = self.driver.execute_script("return arguments[0].scrollLeft", div_element)
@@ -237,7 +242,7 @@ class DoorDashScraper:
             time.sleep(0.8) # Wait for items to render
             attempts += 1
 
-    def _parse_current_view(self, headers_map, selenium_sections):
+    def _parse_current_view(self, headers_map, selenium_sections, forced_category=None):
         """Parses the CURRENT state of the DOM and adds new items to master_menu with all required fields."""
         soup = BeautifulSoup(self.driver.page_source, 'lxml')
 
@@ -321,18 +326,11 @@ class DoorDashScraper:
                         if selenium_rating:
                             item_data.update(selenium_rating)
                 
-                # 2. Deduplication Hash
-                # Use both name and price in the hash so we don't accidentally
-                # drop items that share the same name but have different sizes/prices.
-                item_hash = f"{item_data['name']}|{item_data.get('price')}"
-                if item_hash in self.seen_hashes:
-                    continue
-                
-                # 3. Determine Category (Positional) - improved logic using both methods
-                assigned_category = "Featured Items"  # Default category
+                # 2. Determine Category (Positional) - improved logic using both methods
+                assigned_category = forced_category or "Featured Items"  # Default category
                 
                 # Try Selenium-based positioning first (more accurate for dynamic content)
-                if selenium_sections:
+                if selenium_sections and not forced_category:
                     try:
                         # Find corresponding Selenium element
                         aria_label = item_div.get('aria-label')
@@ -350,7 +348,7 @@ class DoorDashScraper:
                         pass
                 
                 # Fallback to BeautifulSoup line-based method
-                if assigned_category == "Featured Items" and headers_map:
+                if assigned_category == "Featured Items" and headers_map and not forced_category:
                     item_line = item_div.sourceline or 0
                     # Find the closest header that appears before this item
                     best_header = None
@@ -373,7 +371,7 @@ class DoorDashScraper:
                 
                 # Final fallback: if still "Featured Items", try to use context
                 # Don't assign to "Most Ordered" or "Most Popular" by default - let reorganization handle it
-                if assigned_category == "Featured Items":
+                if assigned_category == "Featured Items" and not forced_category:
                     # Try to find any valid menu section from headers_map (excluding Most Ordered/Most Popular)
                     if headers_map and len(headers_map) > 0:
                         for header in headers_map:
@@ -383,6 +381,12 @@ class DoorDashScraper:
                                 assigned_category = header_name
                                 break
 
+                # 3. Deduplication Hash
+                # Use category + name + price in the hash to avoid duplicates across category passes.
+                item_hash = f"{assigned_category}|{item_data['name']}|{item_data.get('price')}"
+                if item_hash in self.seen_hashes:
+                    continue
+                
                 # 4. Add to Master List
                 if assigned_category not in self.master_menu:
                     self.master_menu[assigned_category] = []
@@ -399,62 +403,53 @@ class DoorDashScraper:
                 continue
     
     def _extract_rating_selenium(self, selenium_element):
-        """Extract rating data from a Selenium element"""
+        """Extract rating data from a Selenium element with comprehensive pattern matching"""
         rating_data = {}
         try:
             # Get all text from the element
             text = selenium_element.text
             aria_label = selenium_element.get_attribute('aria-label') or ''
+            inner_html = selenium_element.get_attribute('innerHTML') or ''
             
-            # Check both text and aria-label
-            for check_text in [text, aria_label]:
+            # Define all rating patterns to search for
+            rating_patterns = [
+                r'[•·]\s*(\d{1,3})%\s*\((\d+[,\d]*)\)',  # •XX% (XX) - DoorDash style
+                r'(\d{1,3})%\s*\((\d+[,\d]*)\)',  # XX% (XX)
+                r'(\d{1,3})%\s*liked\s*(?:by\s*)?(\d+[,\d]*)',  # XX% liked by XX
+                r'(\d{1,3})%\s+(\d+[,\d]*)',  # XX% XX (space separated)
+            ]
+            
+            # Check text, aria-label, and innerHTML
+            for check_text in [text, aria_label, inner_html]:
                 if not check_text:
                     continue
                 
-                # Pattern 1: "XX% (XXX)" format
-                match1 = re.search(r'(\d{1,3})%\s*\((\d+[,\d]*)\)', check_text)
-                if match1:
-                    rating_data['rating_percentage'] = f"{match1.group(1)}%"
-                    rating_data['rating_count'] = int(match1.group(2).replace(',', ''))
-                    rating_data['rating_text'] = match1.group(0)
-                    return rating_data
-                
-                # Pattern 2: "XX% liked by XXX people"
-                match2 = re.search(r'(\d{1,3})%\s*(?:liked\s*by\s*)?(\d+[,\d]*)\s*(?:people)?', check_text, re.IGNORECASE)
-                if match2:
-                    rating_data['rating_percentage'] = f"{match2.group(1)}%"
-                    rating_data['rating_count'] = int(match2.group(2).replace(',', ''))
-                    rating_data['rating_text'] = match2.group(0)
-                    return rating_data
+                for pattern in rating_patterns:
+                    match = re.search(pattern, check_text, re.IGNORECASE)
+                    if match:
+                        pct = int(match.group(1))
+                        if 1 <= pct <= 100:  # Valid percentage
+                            rating_data = self._build_rating_fields(pct, match.group(2), f"{pct}% ({match.group(2)})")
+                            return rating_data
             
             # Try finding child elements with rating info
             try:
-                rating_children = selenium_element.find_elements(
-                    By.CSS_SELECTOR,
-                    '[class*="rating"], [class*="Rating"], [class*="like"], [class*="Like"], span[aria-label*="rating"]'
-                )
+                # Look for ALL child spans (DoorDash uses obfuscated class names)
+                all_children = selenium_element.find_elements(By.TAG_NAME, 'span')
                 
-                for child in rating_children:
-                    child_text = child.text
-                    child_aria = child.get_attribute('aria-label') or ''
+                for child in all_children:
+                    child_text = child.text.strip()
                     
-                    for check_text in [child_text, child_aria]:
-                        if not check_text:
-                            continue
-                        
-                        match = re.search(r'(\d{1,3})%\s*\((\d+[,\d]*)\)', check_text)
+                    if not child_text:
+                        continue
+                    
+                    for pattern in rating_patterns:
+                        match = re.search(pattern, child_text, re.IGNORECASE)
                         if match:
-                            rating_data['rating_percentage'] = f"{match.group(1)}%"
-                            rating_data['rating_count'] = int(match.group(2).replace(',', ''))
-                            rating_data['rating_text'] = match.group(0)
-                            return rating_data
-                        
-                        match2 = re.search(r'(\d{1,3})%\s*(?:liked\s*by\s*)?(\d+[,\d]*)', check_text, re.IGNORECASE)
-                        if match2:
-                            rating_data['rating_percentage'] = f"{match2.group(1)}%"
-                            rating_data['rating_count'] = int(match2.group(2).replace(',', ''))
-                            rating_data['rating_text'] = match2.group(0)
-                            return rating_data
+                            pct = int(match.group(1))
+                            if 1 <= pct <= 100:
+                                rating_data = self._build_rating_fields(pct, match.group(2), f"{pct}% ({match.group(2)})")
+                                return rating_data
             except:
                 pass
                 
@@ -462,15 +457,16 @@ class DoorDashScraper:
             pass
         
         return rating_data if rating_data else None
-
+    
     def _extract_item_data(self, item_div):
-        """Extract all required fields from an item div"""
+        """Extract all required fields from an item div with comprehensive rating detection"""
         item_data = {
             'name': None,
             'description': None,
             'price': None,
-            'rating_percentage': 'NA',  # e.g., "84%" or "NA" if not available
-            'rating_count': 'NA',  # e.g., 175 or "NA" if not available
+            'rating_percentage': None,  # e.g., "84%" or None if not available
+            'rating_percent': None,  # e.g., 84 (int) or None
+            'rating_count': None,  # e.g., 175 (int) or None
             'rating_text': None,  # e.g., "84% (175)" - full rating text
             'most_liked_tag': None,
             'image': None,
@@ -570,81 +566,66 @@ class DoorDashScraper:
                         item_data['description'] = desc_text
                         break
             
-            # Extract rating - looking for patterns like "84% (175)" or "84% liked by 175 people"
-            # DoorDash shows item ratings as percentage + count
+            # ========== COMPREHENSIVE RATING EXTRACTION ==========
+            # Get all text from the item div and all nested elements
             all_text = item_div.get_text()
             
-            # Pattern 1: "XX% (XXX)" format - e.g., "84% (175)"
-            rating_pattern1 = re.search(r'(\d{1,3})%\s*\((\d+[,\d]*)\)', all_text)
-            if rating_pattern1:
-                item_data['rating_percentage'] = f"{rating_pattern1.group(1)}%"
-                item_data['rating_count'] = int(rating_pattern1.group(2).replace(',', ''))
-                item_data['rating_text'] = rating_pattern1.group(0)
+            # Helper function to validate rating (filter false positives)
+            def is_valid_rating(pct, count):
+                """Check if rating looks legitimate (not a false positive)"""
+                # DoorDash ratings are typically 50-100%
+                if pct < 50:
+                    return False
+                # Suspicious pattern: percentage equals count (e.g., 50% (50))
+                if pct == count:
+                    return False
+                # Very high counts are suspicious for item ratings (store ratings can be higher)
+                # Item ratings typically have counts < 500
+                if count > 500:
+                    return False
+                return True
             
-            # Pattern 2: "XX% liked by XXX people" format
-            if not item_data['rating_percentage']:
-                rating_pattern2 = re.search(r'(\d{1,3})%\s*(?:liked\s*by\s*)?(\d+[,\d]*)\s*(?:people)?', all_text, re.IGNORECASE)
-                if rating_pattern2:
-                    item_data['rating_percentage'] = f"{rating_pattern2.group(1)}%"
-                    item_data['rating_count'] = int(rating_pattern2.group(2).replace(',', ''))
-                    item_data['rating_text'] = rating_pattern2.group(0)
+            # Method 1: Look for "•XX% (XXX)" format (DoorDash style with bullet)
+            # This is the most reliable pattern - bullet indicates a rating
+            rating_bullet = re.search(r'[•·]\s*(\d{1,3})%\s*\((\d+[,\d]*)\)', all_text)
+            if rating_bullet:
+                pct = int(rating_bullet.group(1))
+                count = int(rating_bullet.group(2).replace(',', ''))
+                if is_valid_rating(pct, count):
+                    self._apply_rating(item_data, pct, count, f"{pct}% ({count})")
+
+            # Method 1b: Look for "XX% (XXX)" without bullet
+            if not item_data['rating_count']:
+                rating_plain = re.search(r'(\d{1,3})%\s*\((\d+[,\d]*)\)', all_text)
+                if rating_plain:
+                    pct = int(rating_plain.group(1))
+                    count = int(rating_plain.group(2).replace(',', ''))
+                    if is_valid_rating(pct, count):
+                        self._apply_rating(item_data, pct, count, f"{pct}% ({count})")
             
-            # Pattern 3: Just percentage "XX%" - count may be in separate element
-            if not item_data['rating_percentage']:
-                rating_pattern3 = re.search(r'(\d{1,3})%', all_text)
-                if rating_pattern3:
-                    # Make sure it's a reasonable percentage (not a price or other number)
-                    pct = int(rating_pattern3.group(1))
-                    if 1 <= pct <= 100:
-                        item_data['rating_percentage'] = f"{pct}%"
-                        item_data['rating_text'] = rating_pattern3.group(0)
-            
-            # Also search using selectors for more structured rating data
-            rating_selectors = [
-                'span[class*="rating"]',
-                'div[class*="rating"]',
-                'span[class*="Rating"]',
-                'span[class*="like"]',
-                'div[class*="like"]',
-                'span[class*="percentage"]',
-                '[data-testid*="rating"]',
-                '[data-testid*="like"]',
-                'span[aria-label*="star"]',
-                'span[aria-label*="rating"]',
-                'span[aria-label*="liked"]'
-            ]
-            
-            for selector in rating_selectors:
-                rating_elems = item_div.select(selector)
-                for rating_elem in rating_elems:
-                    rating_text = rating_elem.get_text().strip()
-                    aria_label = rating_elem.get('aria-label', '')
-                    
-                    # Check both text and aria-label
-                    for text_to_check in [rating_text, aria_label]:
-                        if not text_to_check:
-                            continue
-                        
-                        # Try to parse "XX% (XXX)" or "XX% liked by XXX"
-                        match1 = re.search(r'(\d{1,3})%\s*\((\d+[,\d]*)\)', text_to_check)
-                        if match1:
-                            item_data['rating_percentage'] = f"{match1.group(1)}%"
-                            item_data['rating_count'] = int(match1.group(2).replace(',', ''))
-                            item_data['rating_text'] = match1.group(0)
-                            break
-                        
-                        match2 = re.search(r'(\d{1,3})%\s*(?:liked\s*by\s*)?(\d+[,\d]*)\s*(?:people)?', text_to_check, re.IGNORECASE)
-                        if match2:
-                            item_data['rating_percentage'] = f"{match2.group(1)}%"
-                            item_data['rating_count'] = int(match2.group(2).replace(',', ''))
-                            item_data['rating_text'] = match2.group(0)
-                            break
-                    
-                    if item_data['rating_count']:
+            # Method 2: Search each span individually for rating patterns with bullet
+            if not item_data['rating_count']:
+                all_spans = item_div.find_all(['span', 'div', 'p'])
+                for span in all_spans:
+                    span_text = span.get_text().strip()
+                    # Must have bullet to be a valid rating indicator
+                    if '•' in span_text or '·' in span_text:
+                        match = re.search(r'[•·]\s*(\d{1,3})%\s*\((\d+[,\d]*)\)', span_text)
+                        if match:
+                            pct = int(match.group(1))
+                            count = int(match.group(2).replace(',', ''))
+                            if is_valid_rating(pct, count):
+                                self._apply_rating(item_data, pct, count, f"{pct}% ({count})")
                         break
-                
-                if item_data['rating_count']:
-                    break
+            
+            # Method 3: "XX% liked by XXX people" format (explicit "liked" keyword)
+            if not item_data['rating_count']:
+                rating_pattern2 = re.search(r'(\d{1,3})%\s*liked\s*(?:by\s*)?(\d+[,\d]*)\s*(?:people)?', all_text, re.IGNORECASE)
+                if rating_pattern2:
+                    pct = int(rating_pattern2.group(1))
+                    count = int(rating_pattern2.group(2).replace(',', ''))
+                    if is_valid_rating(pct, count):
+                        self._apply_rating(item_data, pct, count, rating_pattern2.group(0))
             
             # Extract "#1 most liked" tag or similar badges
             tag_selectors = [
@@ -689,6 +670,260 @@ class DoorDashScraper:
             print(f"Error extracting item data: {e}")
         
         return item_data
+
+    def _build_rating_fields(self, pct, count_text, rating_text=None):
+        """Normalize rating fields for consistent storage."""
+        try:
+            pct_int = int(str(pct).replace('%', '').strip())
+        except:
+            return None
+        try:
+            count_int = int(str(count_text).replace(',', '').strip())
+        except:
+            count_int = None
+        if pct_int < 1 or pct_int > 100 or count_int is None:
+            return None
+        return {
+            'rating_percentage': f"{pct_int}%",
+            'rating_percent': pct_int,
+            'rating_count': count_int,
+            'rating_text': rating_text
+        }
+
+    def _apply_rating(self, item_data, pct, count, rating_text=None):
+        """Apply normalized rating fields to item data."""
+        rating_fields = self._build_rating_fields(pct, count, rating_text)
+        if not rating_fields:
+            return
+        item_data.update(rating_fields)
+
+    def _scrape_by_categories(self, headers_map, selenium_sections):
+        """Preferred full-menu scraper: click categories and scroll menu container."""
+        categories = self._detect_menu_categories()
+        if not categories:
+            print("No clickable categories detected; falling back to scroll-based scrape.")
+            return False
+        
+        print(f"Detected {len(categories)} clickable categories.")
+        
+        for idx, category_name in enumerate(categories, 1):
+            print(f"  [{idx}/{len(categories)}] Category: {category_name}")
+            clicked = self._click_category_by_name(category_name)
+            if not clicked:
+                continue
+            self._wait_for_category_activation(category_name)
+            time.sleep(0.8)
+            container = self._find_menu_scroll_container()
+            try:
+                if container:
+                    self.driver.execute_script("arguments[0].scrollTop = 0;", container)
+            except Exception:
+                pass
+            self._scroll_menu_container(container, headers_map, selenium_sections, category_name)
+        
+        return True if self.seen_hashes else False
+
+    def _detect_menu_categories(self):
+        """Detect clickable category tabs/chips on the menu."""
+        categories = []
+        seen = set()
+        excluded = {'menu', 'featured', 'search', 'filters', 'popular'}
+        
+        selectors = [
+            "button[role='tab']",
+            "[role='tab']",
+            "button[aria-controls]",
+            "a[aria-controls]",
+            "button[data-testid*='category']",
+            "a[data-testid*='category']",
+            "div[data-testid*='category']",
+            "button[class*='category']",
+            "div[class*='category']",
+            "li[role='tab']"
+        ]
+        
+        try:
+            elements = self.driver.find_elements(By.CSS_SELECTOR, ", ".join(selectors))
+        except Exception:
+            elements = []
+        
+        for el in elements:
+            try:
+                if not el.is_displayed():
+                    continue
+                text = (el.text or "").strip()
+                if not text:
+                    text = (el.get_attribute('aria-label') or "").strip()
+                if not text:
+                    continue
+                text_norm = re.sub(r'\\s+', ' ', text).strip()
+                if len(text_norm) < 2 or text_norm.lower() in excluded:
+                    continue
+                if text_norm in seen:
+                    continue
+                seen.add(text_norm)
+                categories.append(text_norm)
+            except Exception:
+                continue
+        
+        return categories
+
+    def _click_category_by_name(self, category_name):
+        """Click a category by visible text, with fallbacks for stale elements."""
+        try:
+            xpath = (
+                "//*[self::button or self::a or self::div or self::li]"
+                f"[normalize-space(.)='{category_name}']"
+            )
+            elements = self.driver.find_elements(By.XPATH, xpath)
+            for el in elements:
+                try:
+                    if el.is_displayed():
+                        self._click_element_safe(el)
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        
+        # Fallback: partial match
+        try:
+            xpath = (
+                "//*[self::button or self::a or self::div or self::li]"
+                f"[contains(normalize-space(.), '{category_name[:20]}')]"
+            )
+            elements = self.driver.find_elements(By.XPATH, xpath)
+            for el in elements:
+                try:
+                    if el.is_displayed():
+                        self._click_element_safe(el)
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        
+        return False
+
+    def _click_element_safe(self, element):
+        """Click element reliably (scroll into view + JS click fallback)."""
+        try:
+            self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
+        except Exception:
+            pass
+        try:
+            element.click()
+            return
+        except Exception:
+            pass
+        try:
+            self.driver.execute_script("arguments[0].click();", element)
+        except Exception:
+            pass
+
+    def _wait_for_category_activation(self, category_name, timeout=6):
+        """Wait briefly for category tab/chip to become active after click."""
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                xpath = (
+                    "//*[self::button or self::a or self::div or self::li]"
+                    f"[normalize-space(.)='{category_name}']"
+                )
+                elements = self.driver.find_elements(By.XPATH, xpath)
+                for el in elements:
+                    aria_selected = (el.get_attribute("aria-selected") or "").lower()
+                    class_name = (el.get_attribute("class") or "").lower()
+                    if aria_selected == "true" or "active" in class_name or "selected" in class_name:
+                        return True
+            except Exception:
+                pass
+            time.sleep(0.3)
+        return False
+
+    def _find_menu_scroll_container(self):
+        """Find a scrollable menu container element."""
+        try:
+            script = """
+                const isScrollable = el => el && el.scrollHeight > el.clientHeight + 5;
+                const items = Array.from(document.querySelectorAll('[data-testid="image-action-card-container"], [data-testid*="image-action-card"]'));
+                if (items.length) {
+                    let node = items[0].parentElement;
+                    while (node && node !== document.body) {
+                        if (isScrollable(node)) return node;
+                        node = node.parentElement;
+                    }
+                }
+                const candidates = Array.from(document.querySelectorAll('div, main, section')).filter(isScrollable);
+                if (!candidates.length) return null;
+                candidates.sort((a, b) => (b.scrollHeight - a.scrollHeight));
+                return candidates[0];
+            """
+            return self.driver.execute_script(script)
+        except Exception:
+            return None
+
+    def _click_show_more_buttons(self, container=None):
+        """Click 'show more' style buttons within container or page."""
+        keywords = ['show more', 'see more', 'view more']
+        clicked = 0
+        try:
+            if container:
+                buttons = container.find_elements(By.XPATH, ".//button|.//a")
+            else:
+                buttons = self.driver.find_elements(By.XPATH, "//button|//a")
+        except Exception:
+            buttons = []
+        
+        for btn in buttons:
+            try:
+                text = (btn.text or "").strip().lower()
+                if not text:
+                    text = (btn.get_attribute('aria-label') or "").strip().lower()
+                if any(k in text for k in keywords) and btn.is_displayed():
+                    btn.click()
+                    clicked += 1
+                    time.sleep(0.5)
+            except Exception:
+                continue
+        return clicked
+
+    def _scroll_menu_container(self, container, headers_map, selenium_sections, forced_category):
+        """Scroll menu container and parse items until no new content loads."""
+        max_attempts = 40
+        stable = 0
+        prev_height = -1
+        prev_count = -1
+        
+        for _ in range(max_attempts):
+            self._parse_current_view(headers_map, selenium_sections, forced_category=forced_category)
+            clicked = self._click_show_more_buttons(container)
+            
+            try:
+                if container:
+                    count = self.driver.execute_script(
+                        "return arguments[0].querySelectorAll('[data-testid=\"image-action-card-container\"], [data-testid*=\"image-action-card\"], [role=\"button\"][aria-label*=\"$\"], [role=\"button\"][aria-label]').length;",
+                        container
+                    )
+                    height = self.driver.execute_script("return arguments[0].scrollHeight", container)
+                    if height == prev_height and count == prev_count and clicked == 0:
+                        stable += 1
+                    else:
+                        stable = 0
+                    prev_height = height
+                    prev_count = count
+                    self.driver.execute_script(
+                        "arguments[0].scrollTop = arguments[0].scrollTop + arguments[0].clientHeight;",
+                        container
+                    )
+                else:
+                    self.driver.execute_script("window.scrollBy(0, 700);")
+            except Exception:
+                pass
+            
+            time.sleep(0.8)
+            if stable >= 2:
+                break
 
     def _extract_info(self, soup, url):
         """Extract restaurant information including name, URL, and cuisine"""
